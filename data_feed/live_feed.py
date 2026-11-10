@@ -16,19 +16,22 @@ from core.greeks import black_scholes_price, calculate_greeks
 DEFAULT_INDIA_VIX = 14.85  # typical India VIX, used only when no data source is available
 
 
-def compute_day_change_pct(df: pd.DataFrame) -> float:
+def previous_session_close(df: pd.DataFrame) -> float:
     """
-    Today's % change versus the previous session's close (how exchanges quote it).
+    Close of the last session before the latest one in a candle frame ('time', 'Open', 'Close').
+    Falls back to the first Open when only one session is present.
+    """
+    dates = pd.to_datetime(df["time"]).dt.normalize()
+    earlier = df[dates < dates.iloc[-1]]
+    return float(earlier["Close"].iloc[-1]) if not earlier.empty else float(df["Open"].iloc[0])
 
-    Expects a candle frame with 'time', 'Open', 'Close' sorted by time.
-    Falls back to the session's first Open when only one session is present.
-    """
+
+def compute_day_change_pct(df: pd.DataFrame) -> float:
+    """Today's % change versus the previous session's close (how exchanges quote it)."""
     if df.empty:
         return 0.0
     latest = float(df["Close"].iloc[-1])
-    dates = pd.to_datetime(df["time"]).dt.normalize()
-    earlier = df[dates < dates.iloc[-1]]
-    reference = float(earlier["Close"].iloc[-1]) if not earlier.empty else float(df["Open"].iloc[0])
+    reference = previous_session_close(df)
     return ((latest - reference) / reference) * 100.0 if reference > 0 else 0.0
 
 

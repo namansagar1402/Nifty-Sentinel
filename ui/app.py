@@ -25,7 +25,8 @@ from core.option_evaluator import OptionEvaluator
 from core.portfolio import PortfolioManager
 from typing import Optional
 
-from data_feed.live_feed import LiveDataFeed
+from data_feed.live_feed import LiveDataFeed, previous_session_close
+from risk_engine.expected_move import expected_move
 from ml_engine.evaluation import evaluate_models
 from data_feed.market_source import Source, VixQuote, get_nifty, get_vix, load_snapshot_meta
 from trade_analyzer.parser import TradebookParser
@@ -472,6 +473,22 @@ with tab1:
                 line=dict(color="#6B665D", width=1.2, dash="dot")
             )
 
+        # Expected-move band: today's 68% range implied by India VIX, centred on yesterday's close.
+        em = expected_move(previous_session_close(nifty_candles_df), live_vix)
+        is_intraday = curr_int in ("5m", "15m") and not candles.empty
+        if is_intraday:
+            session_day = pd.to_datetime(candles["time"]).dt.normalize().iloc[-1]
+            x0 = candles.loc[pd.to_datetime(candles["time"]).dt.normalize() == session_day, "time"].iloc[0]
+            x1 = max(candles["time"].iloc[-1], session_day + pd.Timedelta(hours=15, minutes=30))
+            fig.add_shape(type="rect", x0=x0, x1=x1, y0=em.low, y1=em.high, xref="x", yref="y",
+                          fillcolor="rgba(212, 175, 55, 0.10)", line=dict(width=0), layer="below")
+            for level, label in ((em.high, "Expected high"), (em.low, "Expected low")):
+                fig.add_shape(type="line", x0=x0, x1=x1, y0=level, y1=level, xref="x", yref="y",
+                              line=dict(color="#D4AF37", width=1.2, dash="dash"))
+                fig.add_annotation(x=x1, y=level, xref="x", yref="y", text=f"{label} {level:,.0f}",
+                                   showarrow=False, xanchor="right", yanchor="bottom",
+                                   font=dict(color="#D4AF37", size=11))
+
         fig.update_layout(
             template="plotly_dark",
             paper_bgcolor="#121212",
@@ -505,6 +522,18 @@ with tab1:
             )
         )
 
+        em_inside = em.contains(live_spot)
+        em_status = ("Nifty is inside it" if em_inside
+                     else f"Nifty is outside it: an unusually large move ({'above' if live_spot > em.high else 'below'})")
+        em_where = "" if is_intraday else " Switch to 1D or 1W to see it on the chart."
+        st.markdown(f"""
+        <div style="border: 1px solid rgba(237, 234, 226, 0.12); border-top: none; background: #1E1D1B; padding: 10px 24px;
+                    display: flex; flex-wrap: wrap; gap: 6px 18px; align-items: baseline;">
+            <span style="color: #D4AF37; font-weight: 700; font-size: 0.85rem;">Expected range today</span>
+            <span style="color: #EDEAE2; font-weight: 800; font-size: 1.05rem; white-space: nowrap;">{em.low:,.0f} – {em.high:,.0f}</span>
+            <span style="color: #A39E93; font-size: 0.85rem;">{em.probability_pct:.0f}% chance, ±{em.move_pct:.2f}% (±{em.move_points:,.0f} pts) from VIX {live_vix:.1f} around yesterday's close {em.reference_price:,.0f}. {em_status}.{em_where}</span>
+        </div>""", unsafe_allow_html=True)
+
         st.markdown("<div style='border: 1px solid rgba(237, 234, 226, 0.12); border-top: none; background: #121212; padding: 4px 6px;'>", unsafe_allow_html=True)
         st.plotly_chart(fig, width="stretch")
         st.markdown("</div>", unsafe_allow_html=True)
@@ -518,7 +547,7 @@ with tab1:
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.caption("**Quick Trend Guide**: When Nifty trades **above the blue EMA 20 line**, bullish momentum and Call options carry higher statistical probability. When below, Put options are favored.")
+        st.caption("**Quick trend guide**: when Nifty trades **above the silver EMA 20 line**, momentum is bullish and calls carry higher odds; below it, puts are favoured. The **gold band** is the range India VIX implies for today: about two days in three, Nifty closes inside it.")
 
     render_nifty_candlestick_chart()
 
