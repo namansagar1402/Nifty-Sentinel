@@ -1,31 +1,49 @@
 """
 How good is the take/drop model, measured honestly.
 
-- Trains the production Random Forest configuration and a plain logistic-regression baseline
-  on the training draw (seed 42).
-- Scores both on a separate, never-seen draw (EVALUATION_SEED).
-- Adds k-fold cross-validated ROC-AUC on the training draw, and the accuracy of the
-  "always say no" baseline, so a high accuracy can't hide a lazy model.
+- Trains the production Random Forest configuration, a gradient-boosting model and a plain
+  logistic-regression baseline on training trades.
+- Scores all three on trades they have never seen.
+- Adds cross-validated ROC-AUC on the training trades, and the accuracy of the "always say
+  no" baseline, so a high accuracy can't hide a lazy model.
+
+Two data sources: simulated trades (independent random draws), and real Nifty history,
+where the test set is the most recent months and cross-validation respects time order.
 """
 
 from typing import Any, Dict, List
 
 import numpy as np
+import pandas as pd
 from sklearn.base import clone
+from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score, roc_curve,
 )
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, TimeSeriesSplit, cross_val_score
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 from ml_engine.classifier import TRAINING_SAMPLES, TRAINING_SEED, OptionOutcomePredictor
+from ml_engine.real_data import time_split
 from ml_engine.synthetic_data import generate_synthetic_options_data
 
 EVALUATION_SEED = 99  # differs from TRAINING_SEED (42) and the backtest's seed (7)
 ROC_POINTS = 60       # downsample the ROC curve so the chart stays light
-MODEL_LABELS = {"random_forest": "Random Forest", "logistic_regression": "Logistic regression (baseline)"}
+MODEL_LABELS = {"random_forest": "Random Forest", "gradient_boosting": "Gradient boosting",
+                "logistic_regression": "Logistic regression (baseline)"}
+FEATURES = OptionOutcomePredictor().feature_names
+
+
+def candidate_models() -> Dict[str, Any]:
+    """The three models compared: production Random Forest, gradient boosting, logistic baseline."""
+    return {
+        "random_forest": OptionOutcomePredictor().model,
+        "gradient_boosting": HistGradientBoostingClassifier(max_depth=4, learning_rate=0.1, max_iter=150,
+                                                            random_state=TRAINING_SEED),
+        "logistic_regression": make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)),
+    }
 
 
 def _thin_curve(fpr: np.ndarray, tpr: np.ndarray, points: int = ROC_POINTS) -> Dict[str, List[float]]:
@@ -33,7 +51,7 @@ def _thin_curve(fpr: np.ndarray, tpr: np.ndarray, points: int = ROC_POINTS) -> D
     return {"fpr": [round(float(x), 4) for x in fpr[idx]], "tpr": [round(float(y), 4) for y in tpr[idx]]}
 
 
-def _score(model, x_train, y_train, x_test, y_test, cv: StratifiedKFold) -> Dict[str, Any]:
+def _score(model, x_train, y_train, x_test, y_test, cv) -> Dict[str, Any]:
     cv_auc = cross_val_score(clone(model), x_train, y_train, cv=cv, scoring="roc_auc")
     fitted = clone(model).fit(x_train, y_train)
     pred = fitted.predict(x_test)
@@ -50,29 +68,39 @@ def _score(model, x_train, y_train, x_test, y_test, cv: StratifiedKFold) -> Dict
         # rows = actual (drop, take), columns = predicted (drop, take)
         "confusion_matrix": confusion_matrix(y_test, pred, labels=[0, 1]).tolist(),
         "roc_curve": _thin_curve(fpr, tpr),
+        "test_probabilities": prob,
+        "fitted_model": fitted,
+    }
+
+
+def evaluate_on(train: pd.DataFrame, test: pd.DataFrame, cv) -> Dict[str, Any]:
+    """Scores every candidate model trained on `train` and tested on `test`."""
+    x_train, y_train = train[FEATURES], train["is_profitable"]
+    x_test, y_test = test[FEATURES], test["is_profitable"]
+    profitable_share = float(y_test.mean())
+    return {
+        "train_size": len(train),
+        "test_size": len(test),
+        "profitable_share": round(profitable_share, 4),
+        "majority_baseline_accuracy": round(max(profitable_share, 1 - profitable_share), 4),
+        "models": {name: _score(m, x_train, y_train, x_test, y_test, cv) for name, m in candidate_models().items()},
     }
 
 
 def evaluate_models(test_samples: int = 2000, cv_folds: int = 5) -> Dict[str, Any]:
-    """Scores the Random Forest and a logistic baseline on unseen synthetic trades."""
-    features = OptionOutcomePredictor().feature_names
+    """Simulated trades: train on the seed-42 draw, test on a separate seed-99 draw."""
     train = generate_synthetic_options_data(TRAINING_SAMPLES, seed=TRAINING_SEED)
     test = generate_synthetic_options_data(test_samples, seed=EVALUATION_SEED)
-    x_train, y_train = train[features], train["is_profitable"]
-    x_test, y_test = test[features], test["is_profitable"]
-
-    models = {
-        "random_forest": OptionOutcomePredictor().model,
-        "logistic_regression": make_pipeline(StandardScaler(), LogisticRegression(max_iter=1000)),
-    }
     cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=TRAINING_SEED)
-    profitable_share = float(y_test.mean())
+    report = evaluate_on(train, test, cv)
+    report.update(cv_folds=cv_folds, source="simulated", test_frame=test)
+    return report
 
-    return {
-        "train_size": len(train),
-        "test_size": len(test),
-        "cv_folds": cv_folds,
-        "profitable_share": round(profitable_share, 4),
-        "majority_baseline_accuracy": round(max(profitable_share, 1 - profitable_share), 4),
-        "models": {name: _score(m, x_train, y_train, x_test, y_test, cv) for name, m in models.items()},
-    }
+
+def evaluate_real(trades: pd.DataFrame, test_months: int = 6, cv_folds: int = 5) -> Dict[str, Any]:
+    """Real Nifty trades: test on the last `test_months`; time-ordered CV on the older, purged trades."""
+    train, test, cutoff = time_split(trades, test_months)
+    report = evaluate_on(train, test, TimeSeriesSplit(n_splits=cv_folds))
+    report.update(cv_folds=cv_folds, source="real", cutoff=cutoff, test_frame=test,
+                  train_start=train["entry_date"].min(), test_end=test["entry_date"].max())
+    return report

@@ -29,8 +29,11 @@ from typing import Optional
 
 from data_feed.live_feed import LiveDataFeed, previous_session_close
 from risk_engine.expected_move import expected_move
-from ml_engine.evaluation import evaluate_models
-from data_feed.market_source import Source, VixQuote, get_nifty, get_vix, load_snapshot_meta
+from ml_engine.evaluation import evaluate_models, evaluate_real, MODEL_LABELS, FEATURES as FEATURE_NAMES
+from ml_engine.real_data import build_option_trades, load_history
+from ml_engine.explain import explain_forest_prediction
+from backtesting.threshold import threshold_backtest
+from data_feed.market_source import SNAPSHOT_DIR, Source, VixQuote, get_nifty, get_vix, load_snapshot_meta
 from trade_analyzer.parser import TradebookParser
 from trade_analyzer.metrics import PerformanceMetrics
 from trade_analyzer.leakage_detector import LeakageDetector
@@ -1301,190 +1304,214 @@ with tab4:
 # ==============================================================================
 # TAB 5: ML & BACKTEST ANALYSIS
 # ==============================================================================
-with tab5:
-    st.header("Machine Learning & Backtest Engine")
-    st.markdown("Compare three trade filters (take everything, rule-based, Random Forest) on a fresh set of simulated trades.")
-    st.info("Trades here are **synthetic**: generated from a scoring formula, with a fixed ₹5,000 win / ₹3,000 loss per trade. The model is trained on one random draw and tested on a separate one it has never seen, so results show how well it learns the simulated pattern — not proven performance on real Nifty markets.")
-    
-    st.divider()
-    
-    # --- Input Options ---
-    st.subheader("Simulation Parameters")
-    col1, col2 = st.columns(2)
-    with col1:
-        sim_trades = st.slider("Number of Historical Trades to Simulate", min_value=100, max_value=5000, value=1000, step=100)
-    with col2:
-        sim_capital = st.number_input("Initial Capital (₹)", min_value=10000.0, max_value=10000000.0, value=100000.0, step=10000.0)
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    if st.button("Run Backtest Simulation", width="stretch"):
-        with st.spinner(f"Training Random Forest Classifier and running backtest over {sim_trades} trades..."):
-            from backtesting.engine import BacktestEngine
-            import pandas as pd
-            import numpy as np
-            
-            engine = BacktestEngine(n_trades=sim_trades, initial_capital=sim_capital)
-            results = engine.run_backtest()
-            
-            st.success("Simulation Complete! Model Accuracy metrics calculated.")
-            st.divider()
-            
-            # --- 1. Top Level Metrics ---
-            st.subheader("Performance Metrics")
-            
-            # Drawdowns
-            st.markdown("**Maximum Drawdown (Lower is better)**")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Baseline Strategy", f"{results['baseline']['max_drawdown']:.1f}%")
-            
-            rule_imp = results['baseline']['max_drawdown'] - results['rule_based']['max_drawdown']
-            c2.metric("Rule-Based Strategy", f"{results['rule_based']['max_drawdown']:.1f}%", f"{rule_imp:.1f}% improvement")
-            
-            ml_imp = results['baseline']['max_drawdown'] - results['ml_based']['max_drawdown']
-            c3.metric("ML-Based Strategy", f"{results['ml_based']['max_drawdown']:.1f}%", f"{ml_imp:.1f}% improvement")
-            
-            # Success Rates
-            st.markdown("<br>**Success Rate (Higher is better)**", unsafe_allow_html=True)
-            c4, c5, c6 = st.columns(3)
-            c4.metric("Baseline Success Rate", f"{results['baseline']['success_rate']:.1f}%")
-            
-            rule_win_imp = results['rule_based']['success_rate'] - results['baseline']['success_rate']
-            c5.metric("Rule-Based Success Rate", f"{results['rule_based']['success_rate']:.1f}%", f"{rule_win_imp:+.1f}%")
-            
-            ml_win_imp = results['ml_based']['success_rate'] - results['baseline']['success_rate']
-            c6.metric("ML-Based Success Rate", f"{results['ml_based']['success_rate']:.1f}%", f"{ml_win_imp:+.1f}%")
-            
-            st.divider()
-            
-            # --- 2. Visuals ---
-            chart_col1, chart_col2 = st.columns([3, 2])
-            
-            with chart_col1:
-                st.subheader("Equity Curve Comparison")
-                # Prepare data for line chart
-                df_chart = pd.DataFrame({
-                    "Baseline": results['baseline']['equity_curve'],
-                    "Rule-Based": results['rule_based']['equity_curve'],
-                    "ML-Based": results['ml_based']['equity_curve']
-                })
-                # Streamlit line chart is interactive and clean
-                st.line_chart(df_chart, color=["#FF8A73", "#A39E93", "#D4AF37"])
-                
-            with chart_col2:
-                st.subheader("ML Feature Importance")
-                st.markdown("Variables the AI found most predictive:")
-                
-                fi = results['feature_importances']
-                df_fi = pd.DataFrame({"Feature": list(fi.keys()), "Importance": list(fi.values())})
-                df_fi = df_fi.sort_values(by="Importance", ascending=True)
-                
-                fig_fi = go.Figure(go.Bar(
-                    x=df_fi["Importance"], y=df_fi["Feature"], orientation="h",
-                    marker_color="#B9B2A3",
-                ))
-                fig_fi.update_layout(
-                    template="plotly_dark", height=360, xaxis_title="Weight",
-                    margin=dict(l=10, r=10, t=10, b=10),
-                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-                )
-                st.plotly_chart(fig_fi, width="stretch")
-                
-            st.divider()
-            
-            # --- 3. Final Capital Bar Chart ---
-            st.subheader("Final Capital Output")
-            final_caps = pd.DataFrame({
-                "Strategy": ["Baseline", "Rule-Based", "ML-Based"],
-                "Final Capital (₹)": [
-                    results['baseline']['final_capital'], 
-                    results['rule_based']['final_capital'], 
-                    results['ml_based']['final_capital']
-                ]
-            }).set_index("Strategy")
-            
-            st.bar_chart(final_caps, color="#D4AF37")
+ML_SOURCES = ("Real Nifty history", "Simulated trades")
+SIMULATED_WIN_INR, SIMULATED_LOSS_INR = 5000.0, -3000.0
+RULE_MAX_DECAY_PCT, RULE_MAX_VIX = 10.0, 25.0
 
 
-# ---- ML tab: how good is the model? (always shown, cached) ----
-@st.cache_data(show_spinner="Scoring the models on unseen trades...")
-def _cached_model_report() -> dict:
+@st.cache_resource(show_spinner="Building trades from 5 years of Nifty history and training the models...")
+def _cached_real_report(allow_download: bool):
+    history = load_history(SNAPSHOT_DIR, allow_download=allow_download)
+    if history.empty:
+        return None, history
+    return evaluate_real(build_option_trades(history)), history
+
+
+@st.cache_resource(show_spinner="Training the models on simulated trades...")
+def _cached_sim_report():
     return evaluate_models()
 
 
 with tab5:
-    st.divider()
+    st.header("Machine Learning & Backtest Engine")
+    st.write("A model that rates option trades TAKE or DROP, compared with two alternatives, tested on trades it "
+             "has never seen, and backtested at the level of confidence you choose.")
+
+    ml_source = st.radio("Training data", ML_SOURCES, horizontal=True, key="ml_source")
+    ml_report, ml_history = (_cached_real_report(not demo_mode) if ml_source == ML_SOURCES[0] else (_cached_sim_report(), None))
+    if ml_report is None:
+        st.warning("No Nifty history is saved yet and the app is offline, so showing simulated trades. "
+                   "Run scripts/save_market_snapshot.py with internet to save the history.")
+        ml_report, ml_source = _cached_sim_report(), ML_SOURCES[1]
+
+    is_real = ml_report["source"] == "real"
+    if is_real:
+        st.info(f"**Real data.** {ml_report['train_size'] + ml_report['test_size']:,} option trades built from "
+                f"{len(ml_history):,} trading days of Nifty 50 and India VIX ({ml_history['date'].min():%b %Y} to "
+                f"{ml_history['date'].max():%b %Y}). Each day: calls and puts at 5 strikes (−2% to +2%) and 3 expiries "
+                f"(2, 7, 14 days), priced with Black-Scholes at that day's close and VIX, held to expiry and labelled by "
+                f"what Nifty actually did. Trained on trades before {ml_report['cutoff']:%d %b %Y}, tested on the "
+                f"{ml_report['test_size']:,} trades after it; training trades still open at that date are removed.")
+    else:
+        st.info("**Simulated data.** Trades come from a scoring formula: trained on one random draw (seed 42) and "
+                "tested on a separate one (seed 99). Results show how well the models learn the simulated pattern, "
+                "not proven performance on real Nifty markets.")
+
+    models = ml_report["models"]
+    rf, gb, lr = models["random_forest"], models["gradient_boosting"], models["logistic_regression"]
+
+    # --- 1. How good is the model? ---
     st.subheader("How good is the model?")
-    rep = _cached_model_report()
-    rf, lr = rep["models"]["random_forest"], rep["models"]["logistic_regression"]
-    st.write(f"Both models are trained on {rep['train_size']:,} simulated trades and scored on "
-             f"{rep['test_size']:,} different trades they have never seen. Only "
-             f"{rep['profitable_share']:.0%} of trades are profitable, so a model that always says "
-             f"\"drop\" would already be {rep['majority_baseline_accuracy']:.0%} accurate. "
-             "That's the bar to beat.")
+    st.write(f"Only {ml_report['profitable_share']:.0%} of the test trades were profitable, so a model that always "
+             f"says \"drop\" is already {ml_report['majority_baseline_accuracy']:.0%} accurate. ROC-AUC is the fairer "
+             "score: 0.5 is a coin flip, 1.0 is perfect ranking of winners above losers.")
 
-    def _metric_pair(label: str, key: str, fmt: str = "{:.1%}") -> str:
-        better = "rf" if rf[key] > lr[key] else ("lr" if lr[key] > rf[key] else "tie")
-        rf_cls = "val-green" if better == "rf" else ""
-        lr_cls = "val-green" if better == "lr" else ""
-        return f"""
-        <div class="clean-card" style="min-height: 128px;">
-            <div class="clean-metric-title">{label}</div>
-            <div style="display: flex; justify-content: space-between; gap: 10px; font-size: 0.82rem; color: #A39E93;">
-                <div>Random Forest<br><span class="clean-metric-val nowrap-num metric-sm {rf_cls}">{fmt.format(rf[key])}</span></div>
-                <div style="text-align: right;">Logistic<br><span class="clean-metric-val nowrap-num metric-sm {lr_cls}">{fmt.format(lr[key])}</span></div>
-            </div>
-        </div>"""
+    def _model_row(label: str, key: str, fmt: str = "{:.1%}") -> str:
+        values = {name: models[name][key] for name in models}
+        best = max(values, key=values.get)
+        cells = "".join(
+            f"<div style='text-align: right;'><span style='font-size: 0.75rem; color: #A39E93;'>{MODEL_LABELS[name].split(' (')[0]}</span><br>"
+            f"<span class='clean-metric-val nowrap-num metric-sm {'val-green' if name == best else ''}'>{fmt.format(values[name])}</span></div>"
+            for name in ("random_forest", "gradient_boosting", "logistic_regression"))
+        return (f"<div class='clean-card' style='min-height: 128px;'><div class='clean-metric-title'>{label}</div>"
+                f"<div style='display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;'>{cells}</div></div>")
 
-    e1, e2, e3, e4 = st.columns(4)
-    e1.markdown(_metric_pair("ROC-AUC (unseen trades)", "roc_auc", "{:.3f}"), unsafe_allow_html=True)
-    e2.markdown(_metric_pair(f"Accuracy (bar: {rep['majority_baseline_accuracy']:.0%})", "accuracy"), unsafe_allow_html=True)
-    e3.markdown(_metric_pair("Precision (of TAKE calls)", "precision"), unsafe_allow_html=True)
-    e4.markdown(_metric_pair("Recall (winners caught)", "recall"), unsafe_allow_html=True)
-    st.caption(f"{rep['cv_folds']}-fold cross-validated ROC-AUC on the training trades: "
-               f"Random Forest {rf['cv_auc_mean']:.3f} ± {rf['cv_auc_std']:.3f}, "
-               f"logistic {lr['cv_auc_mean']:.3f} ± {lr['cv_auc_std']:.3f}. The small spread means the scores are stable.")
+    e1, e2 = st.columns(2)
+    e1.markdown(_model_row("ROC-AUC on unseen trades", "roc_auc", "{:.3f}"), unsafe_allow_html=True)
+    e2.markdown(_model_row(f"Accuracy (bar to beat: {ml_report['majority_baseline_accuracy']:.0%})", "accuracy"), unsafe_allow_html=True)
+    e3, e4 = st.columns(2)
+    e3.markdown(_model_row("Precision (TAKE calls that won)", "precision"), unsafe_allow_html=True)
+    e4.markdown(_model_row("Recall (winners caught at 50%)", "recall"), unsafe_allow_html=True)
+    cv_kind = "time-ordered " if is_real else ""
+    st.caption(f"{ml_report['cv_folds']}-fold {cv_kind}cross-validated ROC-AUC on the training trades: " + ", ".join(
+        f"{MODEL_LABELS[n].split(' (')[0]} {models[n]['cv_auc_mean']:.3f} ± {models[n]['cv_auc_std']:.3f}" for n in models)
+        + ". Best value in each card is highlighted.")
 
     roc_col, cm_col = st.columns([3, 2])
     with roc_col:
         st.markdown("#### ROC curve")
         fig_roc = go.Figure()
-        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], name="Coin flip (0.500)",
-                                     line=dict(color="#A39E93", dash="dash", width=1)))
-        fig_roc.add_trace(go.Scatter(x=lr["roc_curve"]["fpr"], y=lr["roc_curve"]["tpr"],
-                                     name=f"Logistic ({lr['roc_auc']:.3f})", line=dict(color="#B9B2A3", width=2, dash="dot")))
-        fig_roc.add_trace(go.Scatter(x=rf["roc_curve"]["fpr"], y=rf["roc_curve"]["tpr"],
-                                     name=f"Random Forest ({rf['roc_auc']:.3f})", line=dict(color="#D4AF37", width=2.5)))
-        fig_roc.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#1E1D1B", height=340,
+        fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], name="Coin flip (0.500)", line=dict(color="#6B665D", dash="dash", width=1)))
+        for name, colour, dash in (("logistic_regression", "#A39E93", "dot"), ("gradient_boosting", "#B9B2A3", "dash"),
+                                   ("random_forest", "#D4AF37", "solid")):
+            m = models[name]
+            fig_roc.add_trace(go.Scatter(x=m["roc_curve"]["fpr"], y=m["roc_curve"]["tpr"],
+                                         name=f"{MODEL_LABELS[name].split(' (')[0]} ({m['roc_auc']:.3f})",
+                                         line=dict(color=colour, width=2.5 if name == "random_forest" else 2, dash=dash)))
+        fig_roc.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#1E1D1B", height=360,
                               margin=dict(l=10, r=10, t=10, b=40),
                               xaxis=dict(title="False alarms (losers called TAKE)", range=[0, 1], tickformat=".0%"),
                               yaxis=dict(title="Winners caught", range=[0, 1], tickformat=".0%"),
                               legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
         st.plotly_chart(fig_roc, width="stretch")
-
     with cm_col:
-        st.markdown("#### Random Forest: right and wrong calls")
+        st.markdown("#### Random Forest at 50%: right and wrong calls")
         (tn, fp), (fn, tp) = rf["confusion_matrix"]
-        labels = [[f"Correct DROP<br><b>{tn:,}</b>", f"Wrong TAKE<br><b>{fp:,}</b>"],
-                  [f"Missed winner<br><b>{fn:,}</b>", f"Correct TAKE<br><b>{tp:,}</b>"]]
         fig_cm = go.Figure(go.Heatmap(
-            # Colour by right (lime) vs wrong (coral); the counts are in the cell text.
             z=[[1, 0], [0, 1]], x=["Model says DROP", "Model says TAKE"], y=["Actually lost", "Actually won"],
-            text=labels, texttemplate="%{text}", textfont=dict(color="#121212", size=13),
-            colorscale=[[0, "#FF8A73"], [1, "#5FD39A"]], showscale=False, hoverinfo="skip",
-            xgap=4, ygap=4,
-        ))
-        fig_cm.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#121212", height=340,
+            text=[[f"Correct DROP<br><b>{tn:,}</b>", f"Wrong TAKE<br><b>{fp:,}</b>"],
+                  [f"Missed winner<br><b>{fn:,}</b>", f"Correct TAKE<br><b>{tp:,}</b>"]],
+            texttemplate="%{text}", textfont=dict(color="#121212", size=13),
+            colorscale=[[0, "#FF8A73"], [1, "#5FD39A"]], showscale=False, hoverinfo="skip", xgap=4, ygap=4))
+        fig_cm.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#121212", height=360,
                              margin=dict(l=10, r=10, t=10, b=10), yaxis=dict(autorange="reversed"))
         st.plotly_chart(fig_cm, width="stretch")
 
-    winner = "logistic regression" if lr["roc_auc"] > rf["roc_auc"] else "Random Forest"
-    st.info(f"Honest takeaway: the simple {winner} scores {'slightly ' if abs(lr['roc_auc'] - rf['roc_auc']) < 0.02 else ''}higher. "
-            "That's expected here, because the simulated trades are labelled by a straight-line formula, which a linear "
-            "model captures directly. On real market data, where effects interact (for example theta burn hurting more "
-            "near expiry), the Random Forest's ability to learn those interactions matters more.")
+    ranked = sorted(models, key=lambda n: models[n]["roc_auc"], reverse=True)
+    spread = models[ranked[0]]["roc_auc"] - models[ranked[-1]]["roc_auc"]
+    takeaway = (f"{MODEL_LABELS[ranked[0]].split(' (')[0]} ranks trades best (ROC-AUC {models[ranked[0]]['roc_auc']:.3f}), "
+                f"but all three are within {spread:.3f} of each other.")
+    if is_real:
+        takeaway += (f" On real data the signal is real but modest. At a 50% cut-off the Random Forest catches only "
+                     f"{rf['recall']:.0%} of winners, because most bought options lose: use the slider below to see what a "
+                     "lower bar trades off.")
+    else:
+        takeaway += (" The simulated trades follow a straight-line rule, which a linear model captures directly; switch to "
+                     "real Nifty history to see how the models do on messy, real data.")
+    st.info(f"Honest takeaway: {takeaway}")
 
+    # --- 2. Backtest with a confidence threshold ---
+    st.divider()
+    st.subheader("Backtest: how sure must the model be?")
+    test_frame = ml_report["test_frame"]
+    if is_real:
+        bt_pnl = test_frame["pnl_inr"].to_numpy()
+        per_day = len(test_frame) / max(1, test_frame["entry_date"].nunique())
+        bt_note = (f"Real P&L of each test trade (1 lot, held to expiry), in date order: about {per_day:.0f} trades a "
+                   "day, so the starting capital is set high enough to compare strategies. Buying options mostly "
+                   "loses, so taking everything is the baseline to beat.")
+    else:
+        bt_pnl = np.where(test_frame["is_profitable"].to_numpy() == 1, SIMULATED_WIN_INR, SIMULATED_LOSS_INR)
+        bt_note = "Simulated trades with a fixed +₹5,000 win and −₹3,000 loss."
+    bt_c1, bt_c2 = st.columns([2, 1])
+    with bt_c1:
+        threshold = st.slider("Take a trade only if the Random Forest's chance of profit is at least",
+                              min_value=0.20, max_value=0.80, value=0.40 if is_real else 0.50, step=0.05,
+                              format="%.2f", key="ml_threshold")
+    with bt_c2:
+        bt_capital = st.number_input("Starting capital (₹)", min_value=50000.0, max_value=10000000.0,
+                                     value=2000000.0 if is_real else 100000.0, step=100000.0, key="ml_capital")
+    rules_ok = ((test_frame["theta_burn_pct"] <= RULE_MAX_DECAY_PCT) & (test_frame["vix"] <= RULE_MAX_VIX)).astype(float).to_numpy()
+    strategies = {
+        "Take every trade": threshold_backtest(bt_pnl, np.ones(len(bt_pnl)), 0.5, bt_capital),
+        "Rule-based filter": threshold_backtest(bt_pnl, rules_ok, 0.5, bt_capital),
+        f"ML at {threshold:.0%}+": threshold_backtest(bt_pnl, rf["test_probabilities"], threshold, bt_capital),
+    }
+    s_cols = st.columns(3)
+    for col, (name, res) in zip(s_cols, strategies.items()):
+        gain = res["final_capital"] - bt_capital
+        col.markdown(f"""
+        <div class="clean-card" style="min-height: 150px;">
+            <div class="clean-metric-title">{name}</div>
+            <div class="clean-metric-val nowrap-num metric-sm {'val-green' if gain >= 0 else 'val-red'}">{'+' if gain >= 0 else '−'}₹{abs(gain):,.0f}</div>
+            <div style="font-size: 0.8rem; color: #A39E93;">{res['trades']:,} trades · {res['win_rate']:.1f}% won · worst drawdown {res['max_drawdown_pct']:.1f}%</div>
+            {f"<div style='font-size: 0.8rem; color: #FF8A73; font-weight: 700;'>Account wiped out after {res['ruined_after_trades']:,} trades</div>" if res['ruined_after_trades'] else ""}
+        </div>""", unsafe_allow_html=True)
+    fig_bt = go.Figure()
+    for (name, res), colour in zip(strategies.items(), ("#FF8A73", "#A39E93", "#D4AF37")):
+        fig_bt.add_trace(go.Scatter(y=res["equity_curve"], name=name, mode="lines",
+                                    line=dict(color=colour, width=2.5 if name.startswith("ML") else 1.8)))
+    fig_bt.add_hline(y=bt_capital, line_color="#6B665D", line_dash="dash", line_width=1)
+    fig_bt.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#1E1D1B", height=360,
+                         margin=dict(l=10, r=10, t=10, b=40), xaxis_title="Test trades, in date order",
+                         yaxis_title="Account value (₹)",
+                         legend=dict(orientation="h", yanchor="top", y=-0.2, xanchor="center", x=0.5))
+    st.plotly_chart(fig_bt, width="stretch")
+    st.caption(f"{bt_note} Rule-based filter: skip trades losing over {RULE_MAX_DECAY_PCT:.0f}% a day to time decay "
+               f"or with India VIX above {RULE_MAX_VIX:.0f}. Trading stops if the account reaches zero. "
+               "Careful: choosing the threshold after seeing these results is optimistic; in live use it must be "
+               "fixed in advance on older data.")
 
+    # --- 3. Why this prediction? ---
+    st.divider()
+    st.subheader("Why this prediction?")
+    probs = rf["test_probabilities"]
+    picks = {"The trade the model liked most": int(np.argmax(probs)),
+             "The trade the model liked least": int(np.argmin(probs)),
+             "A borderline trade (closest to your threshold)": int(np.argmin(np.abs(probs - threshold)))}
+    pick_label = st.selectbox("Explain", list(picks), key="ml_explain_pick")
+    pick = picks[pick_label]
+    pick_row = test_frame.iloc[[pick]]
+    bias, contrib = explain_forest_prediction(rf["fitted_model"], pick_row[FEATURE_NAMES])
+    p = float(probs[pick])
+    if is_real:
+        tr = pick_row.iloc[0]
+        outcome = (f"Bought {tr['option_type']} {tr['strike']:,.0f} on {tr['entry_date']:%d %b %Y} with Nifty at "
+                   f"{tr['spot']:,.0f}, {tr['days_to_expiry']:.0f} days to expiry, for ₹{tr['premium']:,.1f}. "
+                   f"Real result at expiry: {'+' if tr['pnl_inr'] >= 0 else '−'}₹{abs(tr['pnl_inr']):,.0f} per lot.")
+    else:
+        outcome = f"Simulated trade: it {'won' if pick_row['is_profitable'].iloc[0] == 1 else 'lost'}."
+    st.markdown(f"""
+    <div class="clean-card">
+        <div style="font-size: 1.05rem;">Model's chance of profit: <b class="{'val-green' if p >= threshold else 'val-red'}">{p:.0%}</b>
+        → {'TAKE' if p >= threshold else 'DROP'} at your {threshold:.0%} threshold</div>
+        <div style="font-size: 0.85rem; color: #A39E93; margin-top: 4px;">{outcome}</div>
+    </div>""", unsafe_allow_html=True)
+    FEATURE_TEXT = {"delta": "Delta", "gamma": "Gamma", "theta_burn_pct": "Time decay %/day", "vix": "India VIX",
+                    "days_to_expiry": "Days to expiry", "moneyness": "Moneyness"}
+    order = sorted(contrib, key=lambda f: abs(contrib[f]))
+    fig_ex = go.Figure(go.Bar(
+        x=[contrib[f] * 100 for f in order],
+        y=[f"{FEATURE_TEXT[f]} = {pick_row[f].iloc[0]:.3g}" for f in order], orientation="h",
+        marker_color=["#5FD39A" if contrib[f] >= 0 else "#FF8A73" for f in order],
+        text=[f"{contrib[f] * 100:+.1f} pts" for f in order], textposition="outside",
+        hovertemplate="%{y}: %{x:+.1f} percentage points<extra></extra>"))
+    fig_ex.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#1E1D1B", height=330,
+                         margin=dict(l=10, r=40, t=10, b=40),
+                         xaxis_title=f"Push on the chance of profit (percentage points, from a {bias:.0%} average)")
+    st.plotly_chart(fig_ex, width="stretch")
+    st.caption(f"Each bar is how much that feature moved this trade's chance of profit away from the average "
+               f"trade ({bias:.0%}); green pushes toward TAKE, coral toward DROP. The bars add up exactly to {p:.0%}.")
 
 # Simple Footer
 st.markdown("---")

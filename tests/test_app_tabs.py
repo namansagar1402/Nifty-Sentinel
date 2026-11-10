@@ -110,5 +110,20 @@ class TestPortfolioTab(unittest.TestCase):
         self.assertIn("What moves your portfolio", text)
 
 
+class TestMlTab(unittest.TestCase):
+    def test_real_and_simulated_sources_slider_and_explanations(self):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=300)
+        at.session_state["demo_mode"] = True
+        at.run()
+        text = " ".join(m.value for m in at.markdown)
+        self.assertIn("Real data", " ".join(i.value for i in at.info))
+        at.slider(key="ml_threshold").set_value(0.3)
+        at.selectbox(key="ml_explain_pick").select_index(1).run()
+        self.assertEqual([e.value for e in at.exception], [])
+        at.radio(key="ml_source").set_value("Simulated trades").run()
+        self.assertEqual([e.value for e in at.exception], [])
+        self.assertIn("Simulated data", " ".join(i.value for i in at.info))
+
+
 if __name__ == "__main__":
     unittest.main()

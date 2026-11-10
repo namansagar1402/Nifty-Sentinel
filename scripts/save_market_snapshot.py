@@ -13,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from data_feed.market_source import SNAPSHOT_DIR, SNAPSHOT_TIMEFRAMES, save_snapshot  # noqa: E402
+from ml_engine.real_data import HISTORY_FILE, download_history  # noqa: E402
 
 
 def main() -> int:
@@ -20,6 +21,12 @@ def main() -> int:
     print(f"Snapshot saved to {SNAPSHOT_DIR} at {meta['saved_at']}")
     print(f"  India VIX: {meta['india_vix']}")
     print(f"  Timeframes saved: {', '.join(meta['timeframes']) or 'none'}")
+    history = download_history()
+    if history.empty:
+        print("  5-year Nifty/VIX history: download failed, keeping the previous file")
+    else:
+        history.to_csv(SNAPSHOT_DIR / HISTORY_FILE, index=False)
+        print(f"  5-year Nifty/VIX history: {len(history)} days for the ML tab")
     if meta["missing_timeframes"]:
         print(f"  Missing (feed returned nothing): {', '.join(meta['missing_timeframes'])}")
     if not meta["timeframes"] or meta["india_vix"] is None:
