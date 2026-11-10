@@ -29,6 +29,7 @@ from typing import Optional
 
 from data_feed.live_feed import LiveDataFeed, previous_session_close
 from risk_engine.expected_move import expected_move
+from ui.chart_helpers import market_closed_rangebreaks
 from ml_engine.evaluation import evaluate_models, evaluate_real, MODEL_LABELS, FEATURES as FEATURE_NAMES
 from ml_engine.real_data import build_option_trades, load_history
 from ml_engine.explain import explain_forest_prediction
@@ -414,7 +415,7 @@ with tab1:
                     <div style="display: flex; align-items: baseline; gap: 14px; margin-top: 6px;">
                         <span style="font-size: 2.2rem; font-weight: 800; color: #EDEAE2; font-family: 'Manrope', sans-serif; font-variant-numeric: tabular-nums;">{current_close:,.2f}</span>
                         <span style="font-size: 1.05rem; font-weight: 700; color: {trend_accent};">
-                            {sign}{diff:,.2f} ({sign}{diff_pct:.2f}%)
+                            {sign}{diff:,.2f} ({sign}{diff_pct:.2f}%) <span style="font-size: 0.8rem; font-weight: 600; color: #A39E93;">over {st.session_state.tf_choice}</span>
                         </span>
                         <span style="color: #A39E93; font-size: 0.85rem; font-weight: 500;">Range: {low_val:,.1f} - {high_val:,.1f}</span>
                     </div>
@@ -516,7 +517,10 @@ with tab1:
                 gridcolor="#1E1D1B",
                 zeroline=False,
                 showticklabels=True,
-                tickfont=dict(color="#A39E93", size=11)
+                tickfont=dict(color="#A39E93", size=11),
+                # Hide nights, weekends and holidays so candles sit side by side.
+                rangebreaks=market_closed_rangebreaks(candles["time"], intraday=curr_int in ("5m", "15m"),
+                                                      daily=curr_int == "1d") if not candles.empty else [],
             ),
             yaxis=dict(
                 showgrid=True,
