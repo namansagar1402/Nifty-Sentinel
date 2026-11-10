@@ -61,5 +61,19 @@ class TestOptionChainControls(unittest.TestCase):
         self.assertIn("Max pain", text)
 
 
+class TestTradeTester(unittest.TestCase):
+    def test_sell_and_later_expiry_render_with_budget_and_heatmap(self):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=180)
+        at.session_state["demo_mode"] = True
+        at.run()
+        at.selectbox(key="test_act_sel").select_index(1)
+        expiry = at.selectbox(key="test_expiry")
+        expiry.select_index(len(expiry.options) - 1).run()
+        self.assertEqual([e.value for e in at.exception], [])
+        text = " ".join(m.value for m in at.markdown)
+        self.assertIn("Worst case vs daily loss limit", text)
+        self.assertIn("Premium collected", text)
+
+
 if __name__ == "__main__":
     unittest.main()

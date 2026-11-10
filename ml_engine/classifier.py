@@ -58,6 +58,25 @@ class OptionOutcomePredictor:
         
         return self.model.predict(features)[0]
 
+    def probability_profitable(self, delta: float, gamma: float, theta_burn_pct: float, vix: float,
+                               dte: float) -> float:
+        """
+        Model's probability (0-1) that a bought option with these features ends profitable.
+        Moneyness is derived from |delta| the same way the training data builds it (0.8 + 0.4 * delta),
+        so live inputs land in the range the model was trained on.
+        """
+        if not self.is_trained:
+            self.train()
+        features = pd.DataFrame([{
+            "delta": abs(delta),
+            "gamma": gamma,
+            "theta_burn_pct": theta_burn_pct,
+            "vix": vix,
+            "days_to_expiry": dte,
+            "moneyness": 0.8 + 0.4 * abs(delta),
+        }])[self.feature_names]
+        return float(self.model.predict_proba(features)[0][1])
+
     def predict_batch(self, df_features: pd.DataFrame) -> pd.Series:
         if not self.is_trained:
             self.train()

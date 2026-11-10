@@ -13,6 +13,18 @@ from core.models import OptionType, TradeAction, Greeks
 from core.greeks import black_scholes_price, calculate_greeks
 
 
+# Verdict thresholds (decay = % of the premium lost per day to time decay).
+OPTIMAL_MAX_DECAY_PCT = 9.0        # an ITM option above this is not "optimal"
+ATM_OPTIMAL_MAX_DECAY_PCT = 4.5    # ATM options must decay slower than this to be optimal
+ATM_OPTIMAL_MIN_PROB_PCT = 50.0
+SPECULATIVE_MAX_DECAY_PCT = 9.0    # ATM / near-OTM limit for "speculative"
+NEAR_OTM_MAX_DISTANCE_PCT = 1.0
+DECAY_TRAP_PCT = 30.0              # losing this much a day is hazardous, whatever the moneyness
+DROP_DECAY_PCT = 10.0              # a bought option decaying faster than this is dropped
+HEDGE_DECAY_PCT = 6.0              # between HEDGE and DROP: suggest a spread
+MIN_TAKE_PROB_PCT = 45.0           # TAKE needs at least this chance of profit
+
+
 class OptionEvaluator:
     """
     Evaluates individual option contracts and advises traders before taking positions.
@@ -91,24 +103,27 @@ class OptionEvaluator:
         # - High IV crush vulnerability
 
         if action == TradeAction.BUY:
-            if is_itm or (is_atm and daily_theta_burn_pct <= 4.5 and prob_of_profit_pct >= 50.0):
-                health_rating = "OPTIMAL"
-                health_color = "#10b981"  # Green
-                health_badge = "OPTIMAL"
+            is_near_otm = is_otm and abs(dist_pct) <= NEAR_OTM_MAX_DISTANCE_PCT
+            if daily_theta_burn_pct > DECAY_TRAP_PCT:
+                health_rating, health_color, health_badge, risk_level = "HAZARDOUS", "#ef4444", "HAZARDOUS", "VERY HIGH"
+                summary = (f"Decay trap: this {moneyness_tag} option loses {daily_theta_burn_pct:.1f}% of its value a day "
+                           f"to time decay (₹{abs(g.theta):.1f}/day). Even a correct view can lose money before expiry.")
+            elif ((is_itm and daily_theta_burn_pct <= OPTIMAL_MAX_DECAY_PCT)
+                  or (is_atm and daily_theta_burn_pct <= ATM_OPTIMAL_MAX_DECAY_PCT
+                      and prob_of_profit_pct >= ATM_OPTIMAL_MIN_PROB_PCT)):
+                health_rating, health_color, health_badge, risk_level = "OPTIMAL", "#10b981", "OPTIMAL", "LOW"
                 summary = f"This {moneyness_tag} option has strong intrinsic value / Delta ({abs(g.delta):.2f}) and a manageable daily decay rate ({daily_theta_burn_pct:.1f}%/day). Good directional vehicle."
-                risk_level = "LOW"
-            elif (is_atm or (is_otm and abs(dist_pct) <= 1.0)) and daily_theta_burn_pct <= 9.0:
-                health_rating = "SPECULATIVE"
-                health_color = "#f59e0b"  # Amber
-                health_badge = "SPECULATIVE"
+            elif is_itm:
+                health_rating, health_color, health_badge, risk_level = "SPECULATIVE", "#f59e0b", "SPECULATIVE", "MODERATE"
+                summary = (f"ITM with strong delta ({abs(g.delta):.2f}), but time decay is heavy: {daily_theta_burn_pct:.1f}% of "
+                           f"the premium a day. Hold it only for a quick move.")
+            elif (is_atm or is_near_otm) and daily_theta_burn_pct <= SPECULATIVE_MAX_DECAY_PCT:
+                health_rating, health_color, health_badge, risk_level = "SPECULATIVE", "#f59e0b", "SPECULATIVE", "MODERATE"
                 summary = f"ATM/OTM option with moderate delta ({abs(g.delta):.2f}) losing ₹{abs(g.theta):.1f}/day ({daily_theta_burn_pct:.1f}% of premium). Requires swift directional move within 24-48 hrs."
-                risk_level = "MODERATE"
             else:
-                health_rating = "HAZARDOUS"
-                health_color = "#ef4444"  # Red
-                health_badge = "HAZARDOUS"
-                summary = f"Dangerous Far OTM option ({dist_pct:+.1f}% away). Extremely fast decay ({daily_theta_burn_pct:.1f}%/day) with low probability of profit ({prob_of_profit_pct:.1f}%). Highly prone to expiring worthless."
-                risk_level = "VERY HIGH"
+                health_rating, health_color, health_badge, risk_level = "HAZARDOUS", "#ef4444", "HAZARDOUS", "VERY HIGH"
+                where = f"Far OTM option ({dist_pct:+.1f}% away)" if is_otm and not is_near_otm else f"{moneyness_tag} option"
+                summary = f"Dangerous {where}. Fast decay ({daily_theta_burn_pct:.1f}%/day) with low probability of profit ({prob_of_profit_pct:.1f}%). Highly prone to expiring worthless."
         else:
             # Short / Option Writing Perspective
             if is_otm and abs(dist_pct) >= 1.2 and days_to_expiry <= 5:
@@ -156,6 +171,47 @@ class OptionEvaluator:
             "lot_size": 50,
             "capital_required_per_lot": round(premium * 50.0, 2) if action == TradeAction.BUY else 125000.0,
         }
+
+    PNL_GRID_MOVES_PCT = (-2.0, -1.5, -1.0, -0.5, 0.0, 0.5, 1.0, 1.5, 2.0)
+    PNL_GRID_MAX_DAY_COLUMNS = 6
+
+    @classmethod
+    def pnl_grid(
+        cls,
+        spot_price: float,
+        strike_price: float,
+        option_type: OptionType,
+        action: TradeAction,
+        days_to_expiry: float,
+        india_vix: float,
+        entry_premium: float,
+        quantity: int,
+        risk_free_rate: float = 0.07,
+    ) -> pd.DataFrame:
+        """
+        Profit or loss in ₹ for Nifty moves (rows, % from today) against time passing (columns:
+        "Today", "+N days", ..., "Expiry"). Prices are Black-Scholes at today's IV; expiry is intrinsic value.
+        """
+        iv_dec = max(0.08, india_vix / 100.0)
+        whole_days = max(0, int(math.ceil(days_to_expiry)) - 1)
+        step = max(1, int(math.ceil(whole_days / max(1, cls.PNL_GRID_MAX_DAY_COLUMNS - 2))))
+        day_points = [0] + list(range(step, whole_days + 1, step))
+        columns = [("Today" if d == 0 else f"+{d} day{'s' if d > 1 else ''}", max(0.0, days_to_expiry - d)) for d in day_points]
+        columns.append(("Expiry", 0.0))
+
+        sign = 1.0 if action == TradeAction.BUY else -1.0
+        rows = {}
+        for move in cls.PNL_GRID_MOVES_PCT:
+            target = spot_price * (1.0 + move / 100.0)
+            row = {}
+            for label, days_left in columns:
+                if days_left <= 0:
+                    value = max(0.0, target - strike_price) if option_type == OptionType.CALL else max(0.0, strike_price - target)
+                else:
+                    value = black_scholes_price(target, strike_price, days_left / 365.0, risk_free_rate, iv_dec, option_type)
+                row[label] = sign * (value - entry_premium) * quantity
+            rows[move] = row
+        return pd.DataFrame.from_dict(rows, orient="index")[[label for label, _ in columns]]
 
     @classmethod
     def test_trade_scenarios(
@@ -234,13 +290,19 @@ class OptionEvaluator:
         # If BUY and Directional but High Theta -> CONVERT TO SPREAD
 
         if action == TradeAction.BUY:
-            if health["health_rating"] == "HAZARDOUS" or health["daily_theta_burn_pct"] > 10.0:
+            burn, pop = health["daily_theta_burn_pct"], health["prob_of_profit_pct"]
+            if health["health_rating"] == "HAZARDOUS" or burn > DROP_DECAY_PCT or pop < MIN_TAKE_PROB_PCT:
                 decision = "DROP"
                 decision_badge = "DROP"
                 decision_color = "#ef4444"
-                decision_reason = f"Severe time decay ({health['daily_theta_burn_pct']:.1f}%/day) and low probability of profit ({health['prob_of_profit_pct']:.1f}%). The math is heavily against long buyers here."
-                suggested_alternative = f"Look at an In-The-Money strike ({spot_price - 100 if option_type == OptionType.CALL else spot_price + 100:.0f}) or construct a Defined-Risk Spread."
-            elif health["daily_theta_burn_pct"] >= 6.0:
+                if burn > DROP_DECAY_PCT:
+                    decision_reason = f"Severe time decay: {burn:.1f}% of the premium lost every day (chance of profit {pop:.1f}%). The math is heavily against buyers here."
+                elif pop < MIN_TAKE_PROB_PCT:
+                    decision_reason = f"Only a {pop:.1f}% chance of profit, below the {MIN_TAKE_PROB_PCT:.0f}% this system requires before taking a trade."
+                else:
+                    decision_reason = health["summary"]
+                suggested_alternative = f"Look at an In-The-Money strike ({spot_price - 100 if option_type == OptionType.CALL else spot_price + 100:.0f}), a later expiry, or a Defined-Risk Spread."
+            elif burn >= HEDGE_DECAY_PCT:
                 decision = "HEDGE"
                 decision_badge = "HEDGE"
                 decision_color = "#3b82f6"

@@ -36,6 +36,9 @@ from trade_analyzer.counterfactual import CounterfactualSimulator
 from risk_engine.monte_carlo import MonteCarloEngine
 from risk_engine.command_center import build_risk_snapshot, compute_max_pain, DEFAULT_STOP_LOSS_POINTS
 from core.expiry import upcoming_expiries
+from risk_engine.containment import DrawdownContainmentEngine
+from risk_engine.trade_budget import check_trade_budget
+from ml_engine.classifier import get_predictor
 from trade_analyzer.upload import (TradebookLoad, load_tradebook_bytes, SUPPORTED_BROKERS,
                                    REQUIRED_COLUMNS_HINT)
 
@@ -902,9 +905,10 @@ with tab2:
 # ==============================================================================
 with tab3:
     st.subheader("Trade Tester: Will this trade give Profit or Loss?")
-    st.write("Test your trade before putting in real money. See what happens if Nifty moves up, down, or stays flat over 1–2 days.")
+    st.write("Test your trade before putting in real money: a verdict, a second opinion from the ML model, "
+             "a check against your daily loss limit, and a map of profit and loss as Nifty moves and time passes.")
 
-    t_col1, t_col2, t_col3, t_col4 = st.columns(4)
+    t_col1, t_col2, t_col3, t_col4, t_col5 = st.columns([1, 1, 1, 1, 1.4])
     with t_col1:
         t_strike = st.selectbox("Strike Price", strike_list, index=8, key="test_stk_sel")
     with t_col2:
@@ -914,91 +918,139 @@ with tab3:
         t_act_str = st.selectbox("Action", ["BUY (Long)", "SELL (Short)"], key="test_act_sel")
         t_act = TradeAction.BUY if "BUY" in t_act_str else TradeAction.SELL
     with t_col4:
-        t_lots = st.number_input("Number of Lots (50 Qty/Lot)", min_value=1, max_value=20, value=1)
+        t_lots = st.number_input("Lots (50 qty each)", min_value=1, max_value=20, value=1, key="test_lots")
+    with t_col5:
+        t_expiry = expiry_by_label[st.selectbox("Expiry", list(expiry_by_label), key="test_expiry")]
+    t_dte = t_expiry.days_to_expiry if t_expiry.days_to_expiry > 0 else 0.25
 
-    # Run Test Simulation
     sim_res = OptionEvaluator.test_trade_scenarios(
-        spot_price=live_spot,
-        strike_price=float(t_strike),
-        option_type=t_type,
-        action=t_act,
-        days_to_expiry=5,
-        india_vix=live_vix,
-        num_lots=int(t_lots),
+        spot_price=live_spot, strike_price=float(t_strike), option_type=t_type, action=t_act,
+        days_to_expiry=t_dte, india_vix=live_vix, num_lots=int(t_lots),
     )
-
-    dec_color = sim_res["decision_color"]
-
-    # Big Clear Recommendation Banner
-    st.markdown(f"""
-    <div style="background: {dec_color}18; border: 2px solid {dec_color}; border-radius: 12px; padding: 20px 24px; margin: 15px 0;">
-        <div style="font-size: 1.4rem; font-weight: 800; color: {dec_color}; margin-bottom: 6px;">
-            {sim_res['decision_badge']}
-        </div>
-        <div style="font-size: 1rem; color: #EDEAE2; margin-bottom: 6px;">
-            <strong>Why:</strong> {sim_res['decision_reason']}
-        </div>
-        <div style="font-size: 0.9rem; color: #A39E93;">
-            <strong>Expert Tip:</strong> {sim_res['suggested_alternative']}
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Quick Summary Cards
     h_data = sim_res["health"]
-    k1, k2, k3 = st.columns(3)
+    t_qty = sim_res["total_quantity"]
+
+    # --- Verdict banner, in the app's palette ---
+    DECISION_COLOURS = {"TAKE": ("#5FD39A", "rgba(95, 211, 154, 0.10)"),
+                        "HEDGE": ("#F0913A", "rgba(240, 145, 58, 0.10)"),
+                        "DROP": ("#FF8A73", "rgba(255, 138, 115, 0.10)")}
+    dec_fg, dec_bg = DECISION_COLOURS.get(sim_res["decision"], ("#EDEAE2", "#1E1D1B"))
+    st.markdown(f"""
+    <div style="background: {dec_bg}; border: 2px solid {dec_fg}; border-radius: 16px; padding: 20px 24px; margin: 15px 0;">
+        <div style="font-size: 1.4rem; font-weight: 800; color: {dec_fg}; margin-bottom: 6px;">{sim_res['decision_badge']}</div>
+        <div style="font-size: 1rem; color: #EDEAE2; margin-bottom: 6px;"><strong>Why:</strong> {sim_res['decision_reason']}</div>
+        <div style="font-size: 0.9rem; color: #A39E93;"><strong>Expert Tip:</strong> {sim_res['suggested_alternative']}</div>
+    </div>""", unsafe_allow_html=True)
+
+    # --- Four cards: cost, chance of profit, decay, risk budget ---
+    k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.markdown(f"""
-        <div class="clean-card">
-            <div class="clean-metric-title">Total Trade Cost</div>
-            <div class="clean-metric-val">₹{sim_res['total_investment_inr']:,.2f}</div>
-            <div style="font-size: 0.8rem; color: #A39E93;">{t_lots} Lot ({t_lots*50} Qty) @ ₹{h_data['premium']:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
+        <div class="clean-card" style="min-height: 150px;">
+            <div class="clean-metric-title">{'Premium paid' if t_act == TradeAction.BUY else 'Premium collected'}</div>
+            <div class="clean-metric-val nowrap-num">₹{sim_res['total_investment_inr']:,.0f}</div>
+            <div style="font-size: 0.8rem; color: #A39E93;">{t_lots} lot ({t_qty} qty) @ ₹{h_data['premium']:.2f}</div>
+        </div>""", unsafe_allow_html=True)
     with k2:
         st.markdown(f"""
-        <div class="clean-card">
-            <div class="clean-metric-title">Estimated Profit Probability</div>
+        <div class="clean-card" style="min-height: 150px;">
+            <div class="clean-metric-title">Chance of profit</div>
             <div class="clean-metric-val {'val-green' if h_data['prob_of_profit_pct'] >= 50 else 'val-red'}">{h_data['prob_of_profit_pct']:.0f}%</div>
-            <div style="font-size: 0.8rem; color: #A39E93;">Delta: {h_data['delta']:.2f}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
+            <div style="font-size: 0.8rem; color: #A39E93;">From delta {h_data['delta']:+.2f}</div>
+        </div>""", unsafe_allow_html=True)
     with k3:
+        # Theta is a per-day rate; with under a day left (or a huge rate) the real loss is capped by the premium.
+        decay_inr = min(abs(h_data['theta_daily_inr']) * t_qty, sim_res['total_investment_inr'])
+        decay_capped = h_data['daily_theta_burn_pct'] >= 100.0 or t_dte < 1
+        decay_value = (f"{'−' if t_act == TradeAction.BUY else '+'}₹{decay_inr:,.0f}"
+                       + ("" if decay_capped else "/day"))
+        decay_note = ("Most of the premium decays before today's close" if decay_capped
+                      else f"{h_data['daily_theta_burn_pct']:.1f}% of the premium per day")
         st.markdown(f"""
-        <div class="clean-card">
-            <div class="clean-metric-title">Time Decay Loss if Nifty Stays Flat</div>
-            <div class="clean-metric-val val-red">-₹{abs(h_data['theta_daily_inr']) * sim_res['total_quantity']:,.0f}/day</div>
-            <div style="font-size: 0.8rem; color: #A39E93;">{h_data['daily_theta_burn_pct']:.1f}% of capital per day</div>
-        </div>
-        """, unsafe_allow_html=True)
+        <div class="clean-card" style="min-height: 150px;">
+            <div class="clean-metric-title">Time decay if Nifty stays flat</div>
+            <div class="clean-metric-val nowrap-num {'val-red' if t_act == TradeAction.BUY else 'val-green'}">{decay_value}</div>
+            <div style="font-size: 0.8rem; color: #A39E93;">{decay_note}</div>
+        </div>""", unsafe_allow_html=True)
 
-    # Simple Scenario Outcome Table
-    st.markdown("#### Expected Profit & Loss Across Market Scenarios")
-    
-    # Format simplified scenario dataframe
-    raw_sc = sim_res["scenario_table"]
-    simple_sc = pd.DataFrame({
-        "Nifty Move": raw_sc["nifty_move_pct"],
-        "Target Nifty Level": raw_sc["target_nifty_spot"],
-        "PnL Today (₹)": raw_sc["Today (T+0) PnL (₹)"],
-        "PnL Tomorrow (₹)": raw_sc["Tomorrow (T+1) PnL (₹)"],
-        "PnL at Expiry (₹)": raw_sc["Expiry (T=0) PnL (₹)"],
-    })
-    st.dataframe(simple_sc, width="stretch", hide_index=True)
+    t_grid = OptionEvaluator.pnl_grid(live_spot, float(t_strike), t_type, t_act, t_dte, live_vix,
+                                      h_data["premium"], t_qty)
+    if t_act == TradeAction.BUY:
+        t_max_loss = sim_res["total_investment_inr"]
+        t_loss_note = "the most a bought option can lose"
+    else:
+        t_max_loss = max(0.0, -float(t_grid.loc[[-2.0, 2.0], "Expiry"].min()))
+        t_loss_note = "on a 2% move against you; a naked sale can lose more"
+    t_limit = DrawdownContainmentEngine.calculate_adaptive_daily_limit(RISK_CAPITAL_INR, india_vix=live_vix)
+    t_budget = check_trade_budget(t_max_loss, t_limit, t_max_loss / int(t_lots) if t_lots else t_max_loss)
+    with k4:
+        budget_cls = "val-green" if t_budget.fits else "val-red"
+        budget_line = ("Fits inside today's limit" if t_budget.fits else
+                       (f"Too big: {t_budget.max_lots_within_limit} lot{'s' if t_budget.max_lots_within_limit != 1 else ''} would fit"
+                        if t_budget.max_lots_within_limit else "Too big even at 1 lot: use a spread"))
+        st.markdown(f"""
+        <div class="clean-card" style="min-height: 150px;">
+            <div class="clean-metric-title">Worst case vs daily loss limit</div>
+            <div class="clean-metric-val nowrap-num {budget_cls}">{t_budget.limit_used_ratio:.1f}×</div>
+            <div style="font-size: 0.8rem; color: #A39E93;">₹{t_max_loss:,.0f} vs ₹{t_limit:,.0f} limit. {budget_line}.</div>
+        </div>""", unsafe_allow_html=True)
+    st.caption(f"Worst case is {t_loss_note}. Daily limit: 1.5% of ₹{RISK_CAPITAL_INR:,.0f}, tightened for VIX {live_vix:.1f}. "
+               f"Quarter-Kelly sizing from your tradebook suggests {snap['sizing']['recommended_lots']} lot.")
+
+    # --- Second opinion from the ML model ---
+    if t_act == TradeAction.BUY:
+        ml_prob = get_predictor().probability_profitable(
+            delta=h_data["delta"], gamma=h_data["gamma"], theta_burn_pct=h_data["daily_theta_burn_pct"],
+            vix=live_vix, dte=t_dte)
+        ml_says = "TAKE" if ml_prob >= 0.5 else "DROP"
+        rules_positive = sim_res["decision"] == "TAKE"
+        agree = (ml_says == "TAKE") == rules_positive
+        agree_text = ("The rules and the model agree." if agree else
+                      "The rules and the model disagree: treat this trade with extra caution.")
+        st.markdown(f"""
+        <div class="clean-card" style="display: flex; flex-wrap: wrap; gap: 8px 28px; align-items: baseline;">
+            <span class="clean-metric-title" style="margin: 0;">Second opinion</span>
+            <span style="font-size: 1rem;">Rules: <b>{sim_res['decision']}</b></span>
+            <span style="font-size: 1rem;">ML model: <b class="{'val-green' if ml_says == 'TAKE' else 'val-red'}">{ml_prob:.0%} chance profitable</b> → leans {ml_says}</span>
+            <span style="font-size: 0.85rem; color: #A39E93;">{agree_text} The model is trained on simulated trades (see the ML tab).</span>
+        </div>""", unsafe_allow_html=True)
+    else:
+        st.caption("Second opinion: the ML model only covers bought options, so it doesn't rate sales.")
+
+    # --- Profit and loss heatmap ---
+    st.markdown("#### Profit or loss as Nifty moves and time passes")
+    grid_rows = [f"{m:+.1f}%  ({live_spot * (1 + m / 100):,.0f})" for m in t_grid.index]
+    z_cap = max(1.0, float(t_grid.abs().to_numpy().max()))
+    fig_heat = go.Figure(go.Heatmap(
+        z=t_grid.to_numpy(), x=list(t_grid.columns), y=grid_rows, zmid=0, zmin=-z_cap, zmax=z_cap,
+        colorscale=[[0, "#FF8A73"], [0.5, "#1E1D1B"], [1, "#5FD39A"]], showscale=False,
+        text=[["₹0" if abs(v) < 0.5 else f"{'+' if v > 0 else '−'}₹{abs(v):,.0f}" for v in row] for row in t_grid.to_numpy()],
+        texttemplate="%{text}", textfont=dict(size=12, color="#EDEAE2"),
+        hovertemplate="Nifty %{y}<br>%{x}: %{text}<extra></extra>", xgap=2, ygap=2,
+    ))
+    fig_heat.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#121212", height=430,
+                           margin=dict(l=10, r=10, t=10, b=10),
+                           xaxis=dict(side="top", title=None), yaxis=dict(title="Nifty move (level)", autorange="reversed"))
+    st.plotly_chart(fig_heat, width="stretch")
+    st.caption(f"Expiry {t_expiry.expiry:%d %b}. Green makes money, coral loses it. Before expiry, values are "
+               "Black-Scholes at today's volatility; the last column is the payoff at expiry.")
+
+    with st.expander("Exact numbers for 1-day and expiry scenarios"):
+        raw_sc = sim_res["scenario_table"]
+        st.dataframe(pd.DataFrame({
+            "Nifty Move": raw_sc["nifty_move_pct"],
+            "Target Nifty Level": raw_sc["target_nifty_spot"],
+            "PnL Today (₹)": raw_sc["Today (T+0) PnL (₹)"],
+            "PnL Tomorrow (₹)": raw_sc["Tomorrow (T+1) PnL (₹)"],
+            "PnL at Expiry (₹)": raw_sc["Expiry (T=0) PnL (₹)"],
+        }), width="stretch", hide_index=True)
 
     if st.button("+ Add this tested trade to portfolio", width="stretch"):
         st.session_state.portfolio_manager.add_position(
-            strike=float(t_strike),
-            option_type=t_type,
-            action=t_act,
-            quantity=sim_res["total_quantity"],
-            entry_price=h_data["premium"],
-            symbol=f"NIFTY {t_strike} {t_type.value}",
+            strike=float(t_strike), option_type=t_type, action=t_act, quantity=t_qty,
+            entry_price=h_data["premium"], symbol=f"NIFTY {t_strike} {t_type.value}",
         )
         st.success(f"Added NIFTY {t_strike} {t_type.value} to your Portfolio!")
-
 
 # ==============================================================================
 # TAB 4: MY PORTFOLIO & PAST TRADEBOOK
