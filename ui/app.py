@@ -41,7 +41,7 @@ from trade_analyzer.upload import (TradebookLoad, load_tradebook_bytes, SUPPORTE
 # Page Setup
 st.set_page_config(
     page_title="Predictive Drawdown Containment System",
-    page_icon="🛡️",
+    page_icon=":material/shield:",
     layout="wide",
     initial_sidebar_state="collapsed",  # Keep collapsed by default for clean look
 )
@@ -310,14 +310,14 @@ _span = ""
 if _n_trades:
     _days = pd.to_datetime(active_trades["entry_time"])
     _span = f" · {_days.min():%d %b %Y} to {_days.max():%d %b %Y}"
-with st.expander(f"📂 Tradebook: {active_tradebook_name} · {_n_trades} trades{_span}", expanded=_upload is not None):
+with st.expander(f"Tradebook: {active_tradebook_name} · {_n_trades} trades{_span}", expanded=_upload is not None):
     st.file_uploader(
         "Upload your broker tradebook to analyse your own trades",
         type=["csv", "xlsx", "xls"], key="tradebook_upload",
         help=f"Works with {SUPPORTED_BROKERS}. Needs {REQUIRED_COLUMNS_HINT}.",
     )
     st.caption(f"Works with {SUPPORTED_BROKERS}. The file is only used in this session and isn't saved. "
-               "Remove it (✕) to go back to the sample.")
+               "Remove the file to go back to the sample.")
     if upload_failed:
         st.error(f"{_user_load.error} Showing the sample tradebook instead.")
     elif not using_sample:
@@ -327,12 +327,12 @@ with st.expander(f"📂 Tradebook: {active_tradebook_name} · {_n_trades} trades
 
 # Navigation: 6 tabs
 tab1, tab_risk, tab2, tab3, tab4, tab5 = st.tabs([
-    "📊 Nifty 50 Price Chart",
-    "🧭 Risk Command Center",
-    "🛡️ Option Safety & Chain",
-    "🧪 Trade Tester",
-    "💼 Active Portfolio",
-    "🤖 ML & Backtest Analysis"
+    "Nifty 50 Price Chart",
+    "Risk Command Center",
+    "Option Safety & Chain",
+    "Trade Tester",
+    "Active Portfolio",
+    "ML & Backtest Analysis"
 ])
 
 
@@ -518,7 +518,7 @@ with tab1:
             st.rerun()
         st.markdown("</div>", unsafe_allow_html=True)
 
-        st.caption("💡 **Quick Trend Guide**: When Nifty trades **above the blue EMA 20 line**, bullish momentum and Call options carry higher statistical probability. When below, Put options are favored.")
+        st.caption("**Quick Trend Guide**: When Nifty trades **above the blue EMA 20 line**, bullish momentum and Call options carry higher statistical probability. When below, Put options are favored.")
 
     render_nifty_candlestick_chart()
 
@@ -547,7 +547,7 @@ def _row(label: str, value: str) -> str:
 
 
 with tab_risk:
-    st.subheader("🧭 Risk Command Center")
+    st.subheader("Risk Command Center")
     st.write("Every risk engine in one place: today's market regime, the strategy it calls for, "
              "how much you could lose, and whether you should be trading at all.")
 
@@ -599,7 +599,7 @@ with tab_risk:
     # --- Row 2: Monte Carlo cone + recommended strategy ---
     mc_col, st_col = st.columns([3, 2])
     with mc_col:
-        st.markdown("#### 🔮 Where your account could be in 100 trades")
+        st.markdown("#### Where your account could be in 100 trades")
         pct, x = mc["percentiles"], mc["trade_indices"]
         fig_mc = go.Figure()
         fig_mc.add_trace(go.Scatter(x=x, y=pct["p95"], line=dict(width=0), showlegend=False, hoverinfo="skip"))
@@ -624,7 +624,7 @@ with tab_risk:
 
     with st_col:
         top = snap["top_strategy"]
-        st.markdown("#### 🎯 Strategy for today's regime")
+        st.markdown("#### Strategy for today's regime")
         if top:
             prof = top["profile"]
             legs_html = "".join(f"<li>{leg}</li>" for leg in top["legs_detail"])
@@ -660,7 +660,7 @@ with tab_risk:
     sz_col, in_col = st.columns(2)
     with sz_col:
         sz = snap["sizing"]
-        st.markdown("#### ⚖️ How big should your next trade be?")
+        st.markdown("#### How big should your next trade be?")
         edge = ("You have a positive edge" if sz["has_positive_edge"]
                 else "No positive edge in your history, so trade the minimum")
         lots = sz["recommended_lots"]
@@ -677,7 +677,7 @@ with tab_risk:
         </div>""", unsafe_allow_html=True)
 
     with in_col:
-        st.markdown("#### 📐 What the regime is based on")
+        st.markdown("#### What the regime is based on")
         ivp_note = "estimated, no VIX history" if inp["iv_percentile_estimated"] else "vs last 12 months"
         rows = "".join([
             _row("EMA 20 / EMA 50 (5-min)", f"{inp['ema_20']:,.0f} / {inp['ema_50']:,.0f}"),
@@ -696,7 +696,7 @@ with tab_risk:
 # ==============================================================================
 with tab2:
 # --- Scanner Section ---
-    st.markdown("#### 🛡️ Option Safety & Health Scanner (Option Chain)")
+    st.markdown("#### Option Safety & Health Scanner (Option Chain)")
     st.write("Evaluate live health across the option chain and instantly add trades to your portfolio.")
 
     atm_base = round(live_spot / 50.0) * 50.0
@@ -748,12 +748,12 @@ with tab2:
         # Action Buttons
         with col6:
             b1, b2 = st.columns(2)
-            if b1.button("➕ CE", key=f"add_ce_{strike}"):
+            if b1.button("+ CE", key=f"add_ce_{strike}"):
                 st.session_state.portfolio_manager.add_position(float(strike), OptionType.CALL, TradeAction.BUY, 50, c_eval['premium'], f"NIFTY {strike} CE")
-                st.toast(f"✅ Added NIFTY {strike} CE to Portfolio!")
-            if b2.button("➕ PE", key=f"add_pe_{strike}"):
+                st.toast(f"Added NIFTY {strike} CE to Portfolio!")
+            if b2.button("+ PE", key=f"add_pe_{strike}"):
                 st.session_state.portfolio_manager.add_position(float(strike), OptionType.PUT, TradeAction.BUY, 50, p_eval['premium'], f"NIFTY {strike} PE")
-                st.toast(f"✅ Added NIFTY {strike} PE to Portfolio!")
+                st.toast(f"Added NIFTY {strike} PE to Portfolio!")
                 
         st.markdown("<hr style='margin: 2px 0px; padding: 0px; border-top: 1px solid #2E2C29;'>", unsafe_allow_html=True)
 
@@ -761,7 +761,7 @@ with tab2:
 # TAB 3: TRADE TESTER (SHOULD I TAKE OR DROP?)
 # ==============================================================================
 with tab3:
-    st.subheader("🧪 Trade Tester: Will this trade give Profit or Loss?")
+    st.subheader("Trade Tester: Will this trade give Profit or Loss?")
     st.write("Test your trade before putting in real money. See what happens if Nifty moves up, down, or stays flat over 1–2 days.")
 
     t_col1, t_col2, t_col3, t_col4 = st.columns(4)
@@ -799,7 +799,7 @@ with tab3:
             <strong>Why:</strong> {sim_res['decision_reason']}
         </div>
         <div style="font-size: 0.9rem; color: #A39E93;">
-            💡 <strong>Expert Tip:</strong> {sim_res['suggested_alternative']}
+            <strong>Expert Tip:</strong> {sim_res['suggested_alternative']}
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -835,7 +835,7 @@ with tab3:
         """, unsafe_allow_html=True)
 
     # Simple Scenario Outcome Table
-    st.markdown("#### 🎯 Expected Profit & Loss Across Market Scenarios")
+    st.markdown("#### Expected Profit & Loss Across Market Scenarios")
     
     # Format simplified scenario dataframe
     raw_sc = sim_res["scenario_table"]
@@ -848,7 +848,7 @@ with tab3:
     })
     st.dataframe(simple_sc, width="stretch", hide_index=True)
 
-    if st.button("➕ Add This Tested Trade to Portfolio", width="stretch"):
+    if st.button("+ Add this tested trade to portfolio", width="stretch"):
         st.session_state.portfolio_manager.add_position(
             strike=float(t_strike),
             option_type=t_type,
@@ -896,7 +896,7 @@ with tab4:
 
     # Left: Active Positions Book
     with sub_col1:
-        st.markdown("### 💼 My Active Positions")
+        st.markdown("### My Active Positions")
 
         if port_mtm["total_positions"] > 0:
             st.markdown("<hr style='margin: 10px 0px; border-top: 1px solid rgba(237, 234, 226, 0.12);'>", unsafe_allow_html=True)
@@ -924,12 +924,12 @@ with tab4:
                 r_c5.markdown(f"<span style='font-size:0.9rem; font-weight:600; white-space:nowrap; color:{pnl_color};'>{'−' if pnl < 0 else '+'}₹{abs(pnl):,.0f}</span>", unsafe_allow_html=True)
                 
                 with r_c6:
-                    if st.button("❌", key=f"del_{row['position_id']}", help="Remove Position"):
+                    if st.button(":material/close:", key=f"del_{row['position_id']}", help="Remove this position"):
                         pm.remove_position(row['position_id'])
                         st.rerun()
 
             st.markdown("<hr style='margin: 10px 0px; border-top: 1px solid rgba(237, 234, 226, 0.12);'>", unsafe_allow_html=True)
-            if st.button("🧹 Clear All Positions", type="secondary"):
+            if st.button("Clear All Positions", type="secondary"):
                 pm.clear_portfolio()
                 st.rerun()
         else:
@@ -937,7 +937,7 @@ with tab4:
 
     # Right: Payoff Chart
     with sub_col2:
-        st.markdown("### 📈 Portfolio Payoff Chart")
+        st.markdown("### Portfolio Payoff Chart")
         
         if port_mtm["total_positions"] > 0:
             legs = []
@@ -998,7 +998,7 @@ with tab4:
     st.divider()
     
     # Bottom: Past Tradebook Auditor & Mistakes
-    st.markdown("### 🚨 Mistakes Detected in Past Trades")
+    st.markdown("### Mistakes Detected in Past Trades")
     st.write("Analysis of your historical tradebook to identify capital leakage.")
     
     st.caption(f"Analysing your {active_tradebook_name} ({len(active_trades)} trades). "
@@ -1034,10 +1034,10 @@ with tab4:
         # Mistakes List
         for leak in audit_res["leakage_breakdown"]:
             if leak["financial_damage"] > 0:
-                st.markdown(f"- 🔴 **{leak['leak_type']}**: Lost **₹{leak['financial_damage']:,.0f}** ({leak['description']})")
+                st.markdown(f"- **{leak['leak_type']}**: Lost **₹{leak['financial_damage']:,.0f}** ({leak['description']})")
 
         # Expandable Advanced Monte Carlo & Curve
-        with st.expander("🔮 View Future Monte Carlo Simulation & Equity Curve"):
+        with st.expander("View Future Monte Carlo Simulation & Equity Curve"):
             tl = sim_res_tb["comparison_curve"]
             fig_comp = go.Figure()
             fig_comp.add_trace(go.Scatter(x=tl["date"], y=tl["actual_equity"], mode="lines", name="Actual PnL", line=dict(color="#FF8A73", width=2, dash="dot")))
@@ -1052,14 +1052,14 @@ with tab4:
 # TAB 5: ML & BACKTEST ANALYSIS
 # ==============================================================================
 with tab5:
-    st.header("🤖 Machine Learning & Backtest Engine")
+    st.header("Machine Learning & Backtest Engine")
     st.markdown("Compare three trade filters (take everything, rule-based, Random Forest) on a fresh set of simulated trades.")
-    st.info("ℹ️ Trades here are **synthetic**: generated from a scoring formula, with a fixed ₹5,000 win / ₹3,000 loss per trade. The model is trained on one random draw and tested on a separate one it has never seen, so results show how well it learns the simulated pattern — not proven performance on real Nifty markets.")
+    st.info("Trades here are **synthetic**: generated from a scoring formula, with a fixed ₹5,000 win / ₹3,000 loss per trade. The model is trained on one random draw and tested on a separate one it has never seen, so results show how well it learns the simulated pattern — not proven performance on real Nifty markets.")
     
     st.divider()
     
     # --- Input Options ---
-    st.subheader("⚙️ Simulation Parameters")
+    st.subheader("Simulation Parameters")
     col1, col2 = st.columns(2)
     with col1:
         sim_trades = st.slider("Number of Historical Trades to Simulate", min_value=100, max_value=5000, value=1000, step=100)
@@ -1068,7 +1068,7 @@ with tab5:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    if st.button("🚀 Run Backtest Simulation", width="stretch"):
+    if st.button("Run Backtest Simulation", width="stretch"):
         with st.spinner(f"Training Random Forest Classifier and running backtest over {sim_trades} trades..."):
             from backtesting.engine import BacktestEngine
             import pandas as pd
@@ -1081,7 +1081,7 @@ with tab5:
             st.divider()
             
             # --- 1. Top Level Metrics ---
-            st.subheader("📊 Performance Metrics")
+            st.subheader("Performance Metrics")
             
             # Drawdowns
             st.markdown("**Maximum Drawdown (Lower is better)**")
@@ -1111,7 +1111,7 @@ with tab5:
             chart_col1, chart_col2 = st.columns([3, 2])
             
             with chart_col1:
-                st.subheader("📈 Equity Curve Comparison")
+                st.subheader("Equity Curve Comparison")
                 # Prepare data for line chart
                 df_chart = pd.DataFrame({
                     "Baseline": results['baseline']['equity_curve'],
@@ -1122,7 +1122,7 @@ with tab5:
                 st.line_chart(df_chart, color=["#FF8A73", "#A39E93", "#D4AF37"])
                 
             with chart_col2:
-                st.subheader("🧠 ML Feature Importance")
+                st.subheader("ML Feature Importance")
                 st.markdown("Variables the AI found most predictive:")
                 
                 fi = results['feature_importances']
@@ -1143,7 +1143,7 @@ with tab5:
             st.divider()
             
             # --- 3. Final Capital Bar Chart ---
-            st.subheader("💰 Final Capital Output")
+            st.subheader("Final Capital Output")
             final_caps = pd.DataFrame({
                 "Strategy": ["Baseline", "Rule-Based", "ML-Based"],
                 "Final Capital (₹)": [
@@ -1164,7 +1164,7 @@ def _cached_model_report() -> dict:
 
 with tab5:
     st.divider()
-    st.subheader("📏 How good is the model?")
+    st.subheader("How good is the model?")
     rep = _cached_model_report()
     rf, lr = rep["models"]["random_forest"], rep["models"]["logistic_regression"]
     st.write(f"Both models are trained on {rep['train_size']:,} simulated trades and scored on "
@@ -1229,7 +1229,7 @@ with tab5:
         st.plotly_chart(fig_cm, width="stretch")
 
     winner = "logistic regression" if lr["roc_auc"] > rf["roc_auc"] else "Random Forest"
-    st.info(f"💡 Honest takeaway: the simple {winner} scores {'slightly ' if abs(lr['roc_auc'] - rf['roc_auc']) < 0.02 else ''}higher. "
+    st.info(f"Honest takeaway: the simple {winner} scores {'slightly ' if abs(lr['roc_auc'] - rf['roc_auc']) < 0.02 else ''}higher. "
             "That's expected here, because the simulated trades are labelled by a straight-line formula, which a linear "
             "model captures directly. On real market data, where effects interact (for example theta burn hurting more "
             "near expiry), the Random Forest's ability to learn those interactions matters more.")

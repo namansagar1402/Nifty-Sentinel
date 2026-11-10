@@ -155,7 +155,7 @@ class PortfolioManager:
         if net_theta > 500.0:
             theta_status = "Positive Theta Harvester (Earning from time decay)"
         elif net_theta < -1500.0:
-            theta_status = "⚠️ Severe Negative Theta Bleed (Time decay rapidly eroding portfolio)"
+            theta_status = "Severe Negative Theta Bleed (Time decay rapidly eroding portfolio)"
         else:
             theta_status = "Balanced Theta Profile"
 

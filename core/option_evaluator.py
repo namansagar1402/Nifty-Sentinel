@@ -76,15 +76,15 @@ class OptionEvaluator:
             req_move_pct = (req_move_pts / spot_price) * 100.0
 
         # Safety Classification Algorithm
-        # 🟢 SAFE / LOW RISK:
+        # SAFE / LOW RISK:
         # - Defined probability > 55%
         # - Daily Theta Burn < 4.5%
         # - ITM or Near-ATM with high delta (>0.45)
-        # 🟡 RISKY / SPECULATIVE:
+        # RISKY / SPECULATIVE:
         # - Daily Theta Burn 4.5% - 9.0%
         # - OTM within 1.0% distance
         # - PoP 35% - 55%
-        # 🔴 HAZARDOUS / DANGEROUS:
+        # HAZARDOUS / DANGEROUS:
         # - Far OTM (>1.2% distance)
         # - Daily Theta Burn > 9.0% (rapid 0-DTE bleed)
         # - PoP < 30%
@@ -94,19 +94,19 @@ class OptionEvaluator:
             if is_itm or (is_atm and daily_theta_burn_pct <= 4.5 and prob_of_profit_pct >= 50.0):
                 health_rating = "OPTIMAL"
                 health_color = "#10b981"  # Green
-                health_badge = "✅ OPTIMAL"
+                health_badge = "OPTIMAL"
                 summary = f"This {moneyness_tag} option has strong intrinsic value / Delta ({abs(g.delta):.2f}) and a manageable daily decay rate ({daily_theta_burn_pct:.1f}%/day). Good directional vehicle."
                 risk_level = "LOW"
             elif (is_atm or (is_otm and abs(dist_pct) <= 1.0)) and daily_theta_burn_pct <= 9.0:
                 health_rating = "SPECULATIVE"
                 health_color = "#f59e0b"  # Amber
-                health_badge = "⚠️ SPECULATIVE"
+                health_badge = "SPECULATIVE"
                 summary = f"ATM/OTM option with moderate delta ({abs(g.delta):.2f}) losing ₹{abs(g.theta):.1f}/day ({daily_theta_burn_pct:.1f}% of premium). Requires swift directional move within 24-48 hrs."
                 risk_level = "MODERATE"
             else:
                 health_rating = "HAZARDOUS"
                 health_color = "#ef4444"  # Red
-                health_badge = "❌ HAZARDOUS"
+                health_badge = "HAZARDOUS"
                 summary = f"Dangerous Far OTM option ({dist_pct:+.1f}% away). Extremely fast decay ({daily_theta_burn_pct:.1f}%/day) with low probability of profit ({prob_of_profit_pct:.1f}%). Highly prone to expiring worthless."
                 risk_level = "VERY HIGH"
         else:
@@ -114,19 +114,19 @@ class OptionEvaluator:
             if is_otm and abs(dist_pct) >= 1.2 and days_to_expiry <= 5:
                 health_rating = "OPTIMAL"
                 health_color = "#10b981"
-                health_badge = "✅ OPTIMAL"
+                health_badge = "OPTIMAL"
                 summary = f"Far OTM option with {prob_of_profit_pct:.1f}% probability of expiring worthless. Strong theta collection (₹{abs(g.theta):.1f}/day)."
                 risk_level = "LOW (if hedged)"
             elif is_atm:
                 health_rating = "SPECULATIVE"
                 health_color = "#f59e0b"
-                health_badge = "⚠️ SPECULATIVE"
+                health_badge = "SPECULATIVE"
                 summary = f"ATM Short option earns high theta (₹{abs(g.theta):.1f}/day) but carries heavy Gamma risk if spot breaks out."
                 risk_level = "MODERATE"
             else:
                 health_rating = "HAZARDOUS"
                 health_color = "#ef4444"
-                health_badge = "❌ HAZARDOUS"
+                health_badge = "HAZARDOUS"
                 summary = f"ITM Short option carries deep delta and unlimited loss liability without a hedge."
                 risk_level = "VERY HIGH"
 
@@ -236,20 +236,20 @@ class OptionEvaluator:
         if action == TradeAction.BUY:
             if health["health_rating"] == "HAZARDOUS" or health["daily_theta_burn_pct"] > 10.0:
                 decision = "DROP"
-                decision_badge = "❌ DROP"
+                decision_badge = "DROP"
                 decision_color = "#ef4444"
                 decision_reason = f"Severe time decay ({health['daily_theta_burn_pct']:.1f}%/day) and low probability of profit ({health['prob_of_profit_pct']:.1f}%). The math is heavily against long buyers here."
                 suggested_alternative = f"Look at an In-The-Money strike ({spot_price - 100 if option_type == OptionType.CALL else spot_price + 100:.0f}) or construct a Defined-Risk Spread."
             elif health["daily_theta_burn_pct"] >= 6.0:
                 decision = "HEDGE"
-                decision_badge = "🛡️ HEDGE"
+                decision_badge = "HEDGE"
                 decision_color = "#3b82f6"
                 decision_reason = f"Option has good potential but naked holding risks losing ₹{abs(health['theta_daily_inr']) * total_qty:,.0f}/day to decay. Selling an OTM wing will finance the position."
                 hedge_strike = strike_price + 200 if option_type == OptionType.CALL else strike_price - 200
                 suggested_alternative = f"Buy Nifty {strike_price:.0f} {option_type.value} & Sell Nifty {hedge_strike:.0f} {option_type.value} to cap theta decay."
             else:
                 decision = "TAKE"
-                decision_badge = "✅ TAKE"
+                decision_badge = "TAKE"
                 decision_color = "#10b981"
                 decision_reason = f"High probability of profit ({health['prob_of_profit_pct']:.1f}%), low theta burn ({health['daily_theta_burn_pct']:.1f}%/day), and solid Delta leverage ({health['delta']:.2f})."
                 suggested_alternative = f"Set Stop-Loss at ₹{entry_px * 0.70:.1f} (30% max loss) and Target at ₹{entry_px * 1.50:.1f}."
@@ -257,13 +257,13 @@ class OptionEvaluator:
             # Short Option Decision
             if health["health_rating"] == "HAZARDOUS":
                 decision = "DROP"
-                decision_badge = "❌ DROP"
+                decision_badge = "DROP"
                 decision_color = "#ef4444"
                 decision_reason = "Unhedged short position carries severe overnight gap liability."
                 suggested_alternative = "Add a far OTM wing long option to form a Credit Spread."
             else:
                 decision = "TAKE"
-                decision_badge = "✅ TAKE"
+                decision_badge = "TAKE"
                 decision_color = "#10b981"
                 decision_reason = f"Collects ₹{abs(health['theta_daily_inr']) * total_qty:,.0f}/day with {health['prob_of_profit_pct']:.1f}% win probability."
                 suggested_alternative = "Always maintain a protective wing or strict stop loss."
