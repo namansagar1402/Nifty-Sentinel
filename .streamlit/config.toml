@@ -1,0 +1,9 @@
+# "Charcoal and gold" theme (palette F).
+# Keeps Streamlit's own widgets (selects, inputs, sliders, toggles) in the same palette as ui/app.py.
+[theme]
+base = "dark"
+primaryColor = "#D4AF37"
+backgroundColor = "#121212"
+secondaryBackgroundColor = "#1E1D1B"
+textColor = "#EDEAE2"
+font = "sans serif"

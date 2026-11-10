@@ -1,0 +1,16 @@
+{
+  "saved_at": "10 Nov 2026 16:42",
+  "india_vix": 17.42,
+  "timeframes": [
+    "5m/5d",
+    "5m/1d",
+    "15m/5d",
+    "1d/1mo",
+    "1d/3mo",
+    "1d/6mo",
+    "1d/1y",
+    "1wk/5y",
+    "1mo/max"
+  ],
+  "missing_timeframes": []
+}

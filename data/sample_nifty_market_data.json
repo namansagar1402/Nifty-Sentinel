@@ -1,0 +1,31 @@
+{
+  "timestamp": "2024-08-27T15:30:00",
+  "underlying": "NIFTY",
+  "spot_price": 24850.50,
+  "futures_price": 24885.00,
+  "india_vix": 14.85,
+  "iv_percentile": 42.0,
+  "iv_rank": 38.5,
+  "pcr_oi": 1.12,
+  "max_pain_strike": 24850.0,
+  "technical_indicators": {
+    "ema_20": 24780.0,
+    "ema_50": 24620.0,
+    "ema_200": 23800.0,
+    "adx_14": 23.5,
+    "rsi_14": 56.4
+  },
+  "options_chain": [
+    {"strike": 24600, "ce_price": 295.0, "ce_oi": 45000, "ce_iv": 14.2, "pe_price": 42.0, "pe_oi": 125000, "pe_iv": 15.6},
+    {"strike": 24650, "ce_price": 252.0, "ce_oi": 38000, "ce_iv": 14.1, "pe_price": 54.0, "pe_oi": 110000, "pe_iv": 15.4},
+    {"strike": 24700, "ce_price": 212.0, "ce_oi": 62000, "ce_iv": 14.0, "pe_price": 68.0, "pe_oi": 145000, "pe_iv": 15.2},
+    {"strike": 24750, "ce_price": 174.0, "ce_oi": 58000, "ce_iv": 13.9, "pe_price": 86.0, "pe_oi": 95000, "pe_iv": 15.0},
+    {"strike": 24800, "ce_price": 138.0, "ce_oi": 95000, "ce_iv": 13.8, "pe_price": 108.0, "pe_oi": 135000, "pe_iv": 14.8},
+    {"strike": 24850, "ce_price": 106.0, "ce_oi": 112000, "ce_iv": 13.7, "pe_price": 132.0, "pe_oi": 118000, "pe_iv": 14.7},
+    {"strike": 24900, "ce_price": 78.0, "ce_oi": 165000, "ce_iv": 13.8, "pe_price": 162.0, "pe_oi": 82000, "pe_iv": 14.8},
+    {"strike": 24950, "ce_price": 55.0, "ce_oi": 130000, "ce_iv": 14.0, "pe_price": 196.0, "pe_oi": 48000, "pe_iv": 15.0},
+    {"strike": 25000, "ce_price": 38.0, "ce_oi": 210000, "ce_iv": 14.2, "pe_price": 235.0, "pe_oi": 65000, "pe_iv": 15.3},
+    {"strike": 25050, "ce_price": 25.0, "ce_oi": 95000, "ce_iv": 14.5, "pe_price": 278.0, "pe_oi": 22000, "pe_iv": 15.7},
+    {"strike": 25100, "ce_price": 16.0, "ce_oi": 150000, "ce_iv": 14.8, "pe_price": 325.0, "pe_oi": 18000, "pe_iv": 16.0}
+  ]
+}

@@ -1,0 +1,100 @@
+# TAB 3: MY PORTFOLIO & PAST TRADEBOOK
+# ==============================================================================
+with tab3:
+    sub_col1, sub_col2 = st.columns([1, 1])
+
+    # Left: Active Positions Book
+    with sub_col1:
+        st.markdown("### 💼 My Active Positions")
+        pm: PortfolioManager = st.session_state.portfolio_manager
+        port_mtm = pm.update_portfolio_mtm(current_spot=live_spot, india_vix=live_vix, days_to_expiry=5)
+
+        # Top MTM Cards
+        p_c1, p_c2 = st.columns(2)
+        with p_c1:
+            tot_pnl = port_mtm["total_mtm_pnl"]
+            pnl_cls = "val-green" if tot_pnl >= 0 else "val-red"
+            st.markdown(f"""
+            <div class="clean-card">
+                <div class="clean-metric-title">Total Live Profit / Loss</div>
+                <div class="clean-metric-val {pnl_cls}">₹{tot_pnl:,.2f}</div>
+                <div style="font-size: 0.8rem; color: #8b949e;">{port_mtm['total_mtm_pct']:+.1f}% on Invested Capital</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        with p_c2:
+            th_val = port_mtm["net_theta_per_day_inr"]
+            th_cls = "val-green" if th_val >= 0 else "val-red"
+            st.markdown(f"""
+            <div class="clean-card">
+                <div class="clean-metric-title">Portfolio Daily Decay</div>
+                <div class="clean-metric-val {th_cls}">₹{th_val:,.1f}/day</div>
+                <div style="font-size: 0.8rem; color: #8b949e;">{port_mtm['theta_status']}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        if port_mtm["total_positions"] > 0:
+            pos_df = port_mtm["positions_dataframe"][["symbol", "action", "qty", "entry_px", "ltp", "mtm_pnl", "pnl_pct"]].rename(columns={
+                "symbol": "Contract", "action": "Side", "qty": "Qty", "entry_px": "Buy Price", "ltp": "LTP", "mtm_pnl": "Live PnL (₹)", "pnl_pct": "Return %"
+            })
+            st.dataframe(pos_df, use_container_width=True, hide_index=True)
+
+            if st.button("🧹 Clear Portfolio", type="secondary"):
+                pm.clear_portfolio()
+                st.rerun()
+        else:
+            st.info("No active positions yet. Add trades using Tab 1 or Tab 2.")
+
+    # Right: Past Tradebook Auditor & Money Saved
+    with sub_col2:
+        st.markdown("### 📊 Past Tradebook & Loss Prevention")
+        
+        sample_path = PROJECT_ROOT / "data" / "sample_zerodha_trades.csv"
+        if sample_path.exists():
+            _, _, tb_df = TradebookParser.parse_csv(str(sample_path))
+            audit_res = LeakageDetector.audit_tradebook(tb_df, initial_capital=200000.0)
+            sim_res_tb = CounterfactualSimulator.simulate_containment(tb_df, initial_capital=200000.0, max_daily_loss_inr=4000.0)
+
+            # Health Score & Money Saved
+            sc_c1, sc_c2 = st.columns(2)
+            with sc_c1:
+                b_score = audit_res["behavioral_health_score"]
+                sc_cls = "val-green" if b_score >= 75 else ("val-amber" if b_score >= 50 else "val-red")
+                st.markdown(f"""
+                <div class="clean-card">
+                    <div class="clean-metric-title">Discipline Score</div>
+                    <div class="clean-metric-val {sc_cls}">{b_score}/100</div>
+                    <div style="font-size: 0.8rem; color: #8b949e;">Emotional Control Rating</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with sc_c2:
+                saved_cap = sim_res_tb["net_capital_saved"]
+                st.markdown(f"""
+                <div class="clean-card">
+                    <div class="clean-metric-title">Money Saved with Stop-Loss</div>
+                    <div class="clean-metric-val val-green">+₹{saved_cap:,.2f}</div>
+                    <div style="font-size: 0.8rem; color: #8b949e;">Drawdown reduced by {sim_res_tb['drawdown_reduction_pct']:.0f}%</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown("#### 🚨 Mistakes Detected in Past Trades:")
+            for leak in audit_res["leakage_breakdown"]:
+                if leak["financial_damage"] > 0:
+                    st.markdown(f"- 🔴 **{leak['leak_type']}**: Lost **₹{leak['financial_damage']:,.0f}** ({leak['description']})")
+
+            # Expandable Advanced Monte Carlo & Curve
+            with st.expander("🔮 View Future Monte Carlo Simulation & Equity Curve"):
+                tl = sim_res_tb["comparison_curve"]
+                fig_comp = go.Figure()
+                fig_comp.add_trace(go.Scatter(x=tl["date"], y=tl["actual_equity"], mode="lines", name="Actual PnL", line=dict(color="#f85149", width=2, dash="dot")))
+                fig_comp.add_trace(go.Scatter(x=tl["date"], y=tl["sim_equity"], mode="lines", name="With Stop Loss Containment", line=dict(color="#3fb950", width=3)))
+                fig_comp.update_layout(template="plotly_dark", paper_bgcolor="#0d1117", plot_bgcolor="#161b22", height=280, margin=dict(l=10, r=10, t=10, b=10))
+                st.plotly_chart(fig_comp, use_container_width=True)
+
+
+# Simple Footer
+st.markdown("---")
+st.caption("🛡️ Predictive Drawdown Containment System • B.Tech Minor Project.")
+
+# ==============================================================================

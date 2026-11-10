@@ -1,0 +1,45 @@
+# --- Chart Section ---
+    c_head1, c_head2 = st.columns([8, 2])
+    with c_head1:
+        st.markdown("#### 📊 Nifty 50 Price Chart")
+    with c_head2:
+        timeframe_choice = st.selectbox("Timeframe", ["5m (Intraday)", "15m (Short Term)", "1d (Daily)"], label_visibility="collapsed")
+        tf_map = {"5m (Intraday)": ("5m", "5d"), "15m (Short Term)": ("15m", "1mo"), "1d (Daily)": ("1d", "6mo")}
+        curr_int, curr_per = tf_map[timeframe_choice]
+
+    _, _, candles = LiveDataFeed.fetch_nifty_spot_and_candles(interval=curr_int, period=curr_per)
+
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=candles["time"],
+        open=candles["Open"],
+        high=candles["High"],
+        low=candles["Low"],
+        close=candles["Close"],
+        name="Nifty",
+        increasing_line_color="#3fb950",
+        decreasing_line_color="#f85149",
+    ))
+    fig.add_trace(go.Scatter(
+        x=candles["time"],
+        y=candles["EMA20"],
+        mode="lines",
+        name="20 EMA (Trend)",
+        line=dict(color="#58a6ff", width=1.5),
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0d1117",
+        plot_bgcolor="#161b22",
+        height=420,
+        margin=dict(l=10, r=10, t=10, b=10),
+        xaxis_rangeslider_visible=False,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    st.caption("💡 **Quick Rule**: When Nifty trades **above the blue 20 EMA line**, CALL options have higher success probability. When below, PUT options are favored.")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    
