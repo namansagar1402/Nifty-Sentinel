@@ -3,6 +3,7 @@ NIFTY SENTINEL - Simplified, Ultra-Clean F&O Trading & Risk Terminal
 Designed for maximum clarity, intuitive decision making, and ease of use.
 """
 
+import os
 import sys
 from pathlib import Path
 import datetime
@@ -22,7 +23,8 @@ import streamlit as st
 from core.models import OptionType, TradeAction, StrategyLeg
 from strategy_optimizer.payoff_calculator import PayoffCalculator
 from core.option_evaluator import OptionEvaluator
-from core.portfolio import PortfolioManager
+from core.portfolio import (PortfolioManager, greeks_in_words, position_alert, DEFAULT_STOP_LOSS_PCT,
+                            DEFAULT_TARGET_PCT)
 from typing import Optional
 
 from data_feed.live_feed import LiveDataFeed, previous_session_close
@@ -52,9 +54,14 @@ st.set_page_config(
 )
 
 # Initialize Session State
+# Positions are saved to a JSON file; SENTINEL_PORTFOLIO_PATH overrides it (tests use a temp file).
+PORTFOLIO_PATH = Path(os.environ.get("SENTINEL_PORTFOLIO_PATH", PROJECT_ROOT / "data" / "portfolio.json"))
 if "portfolio_manager" not in st.session_state:
-    pm = PortfolioManager()
-    pm.add_position(strike=24850.0, option_type=OptionType.CALL, action=TradeAction.BUY, quantity=50, entry_price=110.0, symbol="NIFTY 24850 CE")
+    first_run = not PORTFOLIO_PATH.exists()
+    pm = PortfolioManager(storage_path=PORTFOLIO_PATH)
+    if first_run:
+        pm.add_position(strike=24850.0, option_type=OptionType.CALL, action=TradeAction.BUY, quantity=50,
+                        entry_price=110.0, symbol="NIFTY 24850 CE")
     st.session_state.portfolio_manager = pm
 
 if "selected_strike" not in st.session_state:
@@ -748,12 +755,8 @@ with tab_risk:
         </div>""", unsafe_allow_html=True)
         if st.button(f"+ Add {strat['strategy_name']} to portfolio", key=f"{key_prefix}_{strat['strategy_name']}",
                      width="stretch"):
-            portfolio = st.session_state.portfolio_manager
-            for leg in strat["legs"]:
-                portfolio.add_position(strike=leg.strike, option_type=leg.option_type, action=leg.action,
-                                       quantity=leg.quantity, entry_price=leg.premium,
-                                       symbol=f"NIFTY {int(leg.strike)} {leg.option_type.value}")
-            st.toast(f"Added {strat['strategy_name']} ({len(strat['legs'])} legs) to your portfolio.")
+            group = st.session_state.portfolio_manager.add_strategy(strat["strategy_name"], strat["legs"])
+            st.toast(f"Added {group} ({len(strat['legs'])} legs) to your portfolio.")
 
     st.divider()
     st.markdown("#### Every defined-risk strategy")
@@ -1058,74 +1061,129 @@ with tab3:
 with tab4:
     pm = st.session_state.portfolio_manager
     port_mtm = pm.update_portfolio_mtm(current_spot=live_spot, india_vix=live_vix, days_to_expiry=5)
+    if pm.load_error:
+        st.warning(pm.load_error)
 
-    # Summary cards: full width so large ₹ figures never wrap mid-number
-    p_c1, p_c2 = st.columns(2)
+    # --- Alert settings ---
+    set_c1, set_c2, set_c3 = st.columns([1, 1, 2])
+    with set_c1:
+        stop_pct = st.number_input("Stop-loss (% of premium)", min_value=5, max_value=100, value=int(DEFAULT_STOP_LOSS_PCT),
+                                   step=5, key="pf_stop_pct")
+    with set_c2:
+        target_pct = st.number_input("Target (% of premium)", min_value=5, max_value=500, value=int(DEFAULT_TARGET_PCT),
+                                     step=5, key="pf_target_pct")
+    with set_c3:
+        st.caption("Each position is checked against these. Positions are saved on this computer, so they "
+                   "survive a page refresh or restart.")
+
+    # --- Summary cards: P&L, decay, open loss vs the daily limit ---
+    pf_limit = DrawdownContainmentEngine.calculate_adaptive_daily_limit(RISK_CAPITAL_INR, india_vix=live_vix)
+    p_c1, p_c2, p_c3 = st.columns(3)
     with p_c1:
         tot_pnl = port_mtm["total_mtm_pnl"]
         pnl_cls = "val-green" if tot_pnl >= 0 else "val-red"
         st.markdown(f"""
-        <div class="clean-card hero-card">
+        <div class="clean-card hero-card" style="min-height: 150px;">
             <div class="clean-metric-title">Total live profit / loss</div>
             <div class="clean-metric-val nowrap-num {pnl_cls}">₹{tot_pnl:,.2f}</div>
-            <div class="hero-sub" style="font-size: 0.8rem;">{port_mtm['total_mtm_pct']:+.1f}% on Invested Capital</div>
-        </div>
-        """, unsafe_allow_html=True)
-
+            <div class="hero-sub" style="font-size: 0.8rem;">{port_mtm['total_mtm_pct']:+.1f}% on invested capital</div>
+        </div>""", unsafe_allow_html=True)
     with p_c2:
         th_val = port_mtm["net_theta_per_day_inr"]
         th_cls = "val-green" if th_val >= 0 else "val-red"
         th_sign = "−" if th_val < 0 else "+"
         st.markdown(f"""
-        <div class="clean-card">
+        <div class="clean-card" style="min-height: 150px;">
             <div class="clean-metric-title">Portfolio daily decay</div>
             <div class="clean-metric-val nowrap-num {th_cls}">{th_sign}₹{abs(th_val):,.0f}<span style="font-size: 0.9rem; font-weight: 600;"> / day</span></div>
             <div style="font-size: 0.8rem; color: #A39E93;">{port_mtm['theta_status']}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        </div>""", unsafe_allow_html=True)
+    with p_c3:
+        open_loss = max(0.0, -tot_pnl)
+        used = open_loss / pf_limit if pf_limit > 0 else 0.0
+        used_cls = "val-green" if used < 0.5 else ("val-amber" if used < 1.0 else "val-red")
+        used_note = ("In profit: no loss against today's limit" if open_loss == 0 else
+                     ("Within today's limit" if used < 1.0 else "Over today's limit: the breaker would halt trading"))
+        st.markdown(f"""
+        <div class="clean-card" style="min-height: 150px;">
+            <div class="clean-metric-title">Open loss vs daily limit</div>
+            <div class="clean-metric-val nowrap-num {used_cls}">{used:.0%}</div>
+            <div style="font-size: 0.8rem; color: #A39E93;">₹{open_loss:,.0f} of ₹{pf_limit:,.0f}. {used_note}.</div>
+        </div>""", unsafe_allow_html=True)
+
+    # --- Greeks in plain words ---
+    if port_mtm["total_positions"] > 0:
+        gw = greeks_in_words(port_mtm, live_spot)
+        st.markdown(f"""
+        <div class="clean-card">
+            <div class="clean-metric-title">What moves your portfolio</div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px 28px; font-size: 0.92rem; line-height: 1.5;">
+                <div><b>Price</b> <span style="color: #A39E93;">(delta {port_mtm['net_delta']:+,.0f}, gamma {port_mtm['net_gamma']:+.3f})</span><br>{gw['delta_sentence']}</div>
+                <div><b>Time</b> <span style="color: #A39E93;">(theta {gw['theta_per_day_inr']:+,.0f}/day)</span><br>{gw['theta_sentence']}</div>
+                <div><b>Volatility</b> <span style="color: #A39E93;">(vega {gw['vega_per_point_inr']:+,.0f})</span><br>{gw['vega_sentence']}</div>
+            </div>
+        </div>""", unsafe_allow_html=True)
 
     sub_col1, sub_col2 = st.columns([1, 1])
 
-    # Left: Active Positions Book
+    # Left: Active Positions Book, grouped by strategy
     with sub_col1:
         st.markdown("### My Active Positions")
 
         if port_mtm["total_positions"] > 0:
-            st.markdown("<hr style='margin: 10px 0px; border-top: 1px solid rgba(237, 234, 226, 0.12);'>", unsafe_allow_html=True)
-            
-            # Column Headers
-            h_c1, h_c2, h_c3, h_c4, h_c5, h_c6 = st.columns([2, 1, 1.5, 1.5, 1.5, 1])
-            h_c1.markdown("<span class='pos-head'>Contract</span>", unsafe_allow_html=True)
-            h_c2.markdown("<span class='pos-head'>Qty</span>", unsafe_allow_html=True)
-            h_c3.markdown("<span class='pos-head'>Entry ₹</span>", unsafe_allow_html=True)
-            h_c4.markdown("<span class='pos-head'>LTP ₹</span>", unsafe_allow_html=True)
-            h_c5.markdown("<span class='pos-head'>Live PnL</span>", unsafe_allow_html=True)
-            h_c6.markdown("")
-            st.markdown("<hr style='margin: 5px 0px 10px 0px; border-top: 1px solid rgba(237, 234, 226, 0.12);'>", unsafe_allow_html=True)
-
+            ALERT_STYLE = {"OK": ("#2E2C29", "#A39E93"), "Near stop": ("#F0913A", "#121212"),
+                           "Stop hit": ("#FF8A73", "#121212"), "Target hit": ("#5FD39A", "#121212")}
             pos_df = port_mtm["positions_dataframe"]
-            for idx, row in pos_df.iterrows():
-                r_c1, r_c2, r_c3, r_c4, r_c5, r_c6 = st.columns([2, 1, 1.5, 1.5, 1.5, 1])
-                r_c1.markdown(f"<span style='font-size:0.9rem;'>{row['symbol']}</span>", unsafe_allow_html=True)
-                r_c2.markdown(f"<span style='font-size:0.9rem;'>{row['qty']}</span>", unsafe_allow_html=True)
-                r_c3.markdown(f"<span style='font-size:0.9rem; white-space:nowrap;'>₹{row['entry_px']:.1f}</span>", unsafe_allow_html=True)
-                r_c4.markdown(f"<span style='font-size:0.9rem; white-space:nowrap;'>₹{row['ltp']:.1f}</span>", unsafe_allow_html=True)
-                
-                pnl = row['mtm_pnl']
+            pos_df = pos_df.assign(alert=[position_alert(x, stop_pct, target_pct) for x in pos_df["pnl_pct"]])
+
+            def _position_row(row) -> None:
+                r_c1, r_c2, r_c3, r_c4, r_c5 = st.columns([2.3, 1.4, 1.4, 1.6, 0.8])
+                side = "S" if row["action"] == "SELL" else "B"
+                r_c1.markdown(f"<span style='font-size:0.88rem;'><b style='color:#A39E93;'>{side}</b> {row['symbol']} × {row['qty']}</span>", unsafe_allow_html=True)
+                r_c2.markdown(f"<span style='font-size:0.85rem; white-space:nowrap; color:#A39E93;'>₹{row['entry_px']:.1f} → ₹{row['ltp']:.1f}</span>", unsafe_allow_html=True)
+                pnl = row["mtm_pnl"]
                 pnl_color = "#5FD39A" if pnl >= 0 else "#FF8A73"
-                r_c5.markdown(f"<span style='font-size:0.9rem; font-weight:600; white-space:nowrap; color:{pnl_color};'>{'−' if pnl < 0 else '+'}₹{abs(pnl):,.0f}</span>", unsafe_allow_html=True)
-                
-                with r_c6:
+                r_c3.markdown(f"<span style='font-size:0.9rem; font-weight:600; white-space:nowrap; color:{pnl_color};'>{'−' if pnl < 0 else '+'}₹{abs(pnl):,.0f}</span> <span style='font-size:0.75rem; color:#A39E93;'>{row['pnl_pct']:+.0f}%</span>", unsafe_allow_html=True)
+                bg, fg = ALERT_STYLE[row["alert"]]
+                r_c4.markdown(f"<span class='pill-badge' style='background:{bg}; color:{fg};'>{row['alert']}</span>", unsafe_allow_html=True)
+                with r_c5:
                     if st.button(":material/close:", key=f"del_{row['position_id']}", help="Remove this position"):
-                        pm.remove_position(row['position_id'])
+                        pm.remove_position(row["position_id"])
                         st.rerun()
 
+            groups = [g for g in pos_df["group"].dropna().unique()]
+            for group in groups:
+                legs_df = pos_df[pos_df["group"] == group]
+                g_pnl = legs_df["mtm_pnl"].sum()
+                g_col1, g_col2 = st.columns([3, 1.2])
+                g_col1.markdown(f"<div style='font-weight: 700; padding-top: 6px;'>{group} <span style='font-weight: 600; color: {'#5FD39A' if g_pnl >= 0 else '#FF8A73'};'>{'−' if g_pnl < 0 else '+'}₹{abs(g_pnl):,.0f}</span> <span style='font-size: 0.8rem; color: #A39E93;'>{len(legs_df)} legs</span></div>", unsafe_allow_html=True)
+                with g_col2:
+                    if st.button("Close strategy", key=f"close_{group}", width="stretch"):
+                        pm.remove_group(group)
+                        st.rerun()
+                for _, row in legs_df.iterrows():
+                    _position_row(row)
+                st.markdown("<hr style='margin: 6px 0px; border-top: 1px solid #2E2C29;'>", unsafe_allow_html=True)
+
+            singles = pos_df[pos_df["group"].isna()]
+            if not singles.empty:
+                if groups:
+                    st.markdown("<div style='font-weight: 700; padding-top: 6px;'>Single positions</div>", unsafe_allow_html=True)
+                for _, row in singles.iterrows():
+                    _position_row(row)
+
             st.markdown("<hr style='margin: 10px 0px; border-top: 1px solid rgba(237, 234, 226, 0.12);'>", unsafe_allow_html=True)
-            if st.button("Clear All Positions", type="secondary"):
-                pm.clear_portfolio()
-                st.rerun()
+            act_c1, act_c2 = st.columns(2)
+            with act_c1:
+                st.download_button("Download as CSV", data=pm.to_csv(live_spot, live_vix),
+                                   file_name=f"sentinel_portfolio_{datetime.date.today():%Y%m%d}.csv",
+                                   mime="text/csv", width="stretch")
+            with act_c2:
+                if st.button("Clear All Positions", type="secondary", width="stretch"):
+                    pm.clear_portfolio()
+                    st.rerun()
         else:
-            st.info("No active positions yet. Add trades using Tab 1 or Tab 2.")
+            st.info("No active positions yet. Add trades from the Risk Command Center, the option chain or the Trade Tester.")
 
     # Right: Payoff Chart
     with sub_col2:

@@ -4,3 +4,5 @@ __pycache__/
 venv/
 .pytest_cache/
 .streamlit/secrets.toml
+data/portfolio.json
+data/portfolio.tmp
