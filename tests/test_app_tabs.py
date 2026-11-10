@@ -34,5 +34,18 @@ class TestDemoMode(unittest.TestCase):
         self.assertNotIn("● Live", html)
 
 
+class TestAddStrategyToPortfolio(unittest.TestCase):
+    def test_add_button_puts_every_leg_in_the_portfolio(self):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=180)
+        at.session_state["demo_mode"] = True
+        at.run()
+        before = len(at.session_state["portfolio_manager"].positions)
+        button = next(b for b in at.button if b.label.startswith("+ Add Iron Condor") or
+                      b.label.startswith("+ Add 4-Leg Defined Iron Condor"))
+        button.click().run()
+        self.assertEqual([e.value for e in at.exception], [])
+        self.assertEqual(len(at.session_state["portfolio_manager"].positions), before + 4)
+
+
 if __name__ == "__main__":
     unittest.main()

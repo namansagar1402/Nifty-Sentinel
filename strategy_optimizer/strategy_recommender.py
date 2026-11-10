@@ -29,9 +29,13 @@ class StrategyRecommender:
         max_pain: float = 24500.0,
         days_to_expiry: int = 5,
         lot_size: int = 50,
+        include_all: bool = False,
     ) -> Dict[str, Any]:
         """
-        Generates top optimal defined-risk strategies based on current market parameters.
+        Generates defined-risk strategies for the current market.
+
+        By default only strategies that fit today's regime are returned; with include_all=True all six
+        come back (fitting ones first), each with its real `legs` and a `fits_regime` flag.
         """
         # Round spot to nearest 50-strike
         atm_strike = round(nifty_spot / 50.0) * 50.0
@@ -59,7 +63,8 @@ class StrategyRecommender:
         candidate_strategies = []
 
         # 1. Bullish Low/Moderate IV -> Bull Call Debit Spread
-        if trend_bias == "BULLISH" and vol_regime in ["LOW_IV", "MODERATE_IV"]:
+        fits_bull_call = trend_bias == "BULLISH" and vol_regime in ["LOW_IV", "MODERATE_IV"]
+        if fits_bull_call or include_all:
             buy_strike = atm_strike
             sell_strike = atm_strike + 200.0
             p_buy = get_p(buy_strike, OptionType.CALL)
@@ -73,6 +78,8 @@ class StrategyRecommender:
 
             candidate_strategies.append({
                 "strategy_name": "Bull Call Debit Spread",
+                "legs": legs,
+                "fits_regime": fits_bull_call,
                 "suitability_rank": 1,
                 "regime_fit": "Optimal for Bullish Trend with Cheaper Implied Volatility",
                 "category": "BULLISH",
@@ -88,7 +95,8 @@ class StrategyRecommender:
             })
 
         # 2. Bullish High IV -> Bull Put Credit Spread
-        if trend_bias == "BULLISH" and vol_regime in ["HIGH_IV", "EXTREME_IV", "MODERATE_IV"]:
+        fits_bull_put = trend_bias == "BULLISH" and vol_regime in ["HIGH_IV", "EXTREME_IV", "MODERATE_IV"]
+        if fits_bull_put or include_all:
             sell_strike = atm_strike - 150.0
             buy_strike = sell_strike - 200.0
             p_sell = get_p(sell_strike, OptionType.PUT)
@@ -102,6 +110,8 @@ class StrategyRecommender:
 
             candidate_strategies.append({
                 "strategy_name": "Bull Put Credit Spread (OTM)",
+                "legs": legs,
+                "fits_regime": fits_bull_put,
                 "suitability_rank": 1 if vol_regime in ["HIGH_IV", "EXTREME_IV"] else 2,
                 "regime_fit": "Optimal for Bullish / Moderate Bullish with High IV Crush opportunity",
                 "category": "BULLISH",
@@ -117,7 +127,8 @@ class StrategyRecommender:
             })
 
         # 3. Bearish Low/Moderate IV -> Bear Put Debit Spread
-        if trend_bias == "BEARISH" and vol_regime in ["LOW_IV", "MODERATE_IV"]:
+        fits_bear_put = trend_bias == "BEARISH" and vol_regime in ["LOW_IV", "MODERATE_IV"]
+        if fits_bear_put or include_all:
             buy_strike = atm_strike
             sell_strike = atm_strike - 200.0
             p_buy = get_p(buy_strike, OptionType.PUT)
@@ -131,6 +142,8 @@ class StrategyRecommender:
 
             candidate_strategies.append({
                 "strategy_name": "Bear Put Debit Spread",
+                "legs": legs,
+                "fits_regime": fits_bear_put,
                 "suitability_rank": 1,
                 "regime_fit": "Optimal for Downward Momentum with Low/Moderate IV",
                 "category": "BEARISH",
@@ -146,7 +159,8 @@ class StrategyRecommender:
             })
 
         # 4. Bearish High IV -> Bear Call Credit Spread
-        if trend_bias == "BEARISH" and vol_regime in ["HIGH_IV", "EXTREME_IV", "MODERATE_IV"]:
+        fits_bear_call = trend_bias == "BEARISH" and vol_regime in ["HIGH_IV", "EXTREME_IV", "MODERATE_IV"]
+        if fits_bear_call or include_all:
             sell_strike = atm_strike + 150.0
             buy_strike = sell_strike + 200.0
             p_sell = get_p(sell_strike, OptionType.CALL)
@@ -160,6 +174,8 @@ class StrategyRecommender:
 
             candidate_strategies.append({
                 "strategy_name": "Bear Call Credit Spread (OTM)",
+                "legs": legs,
+                "fits_regime": fits_bear_call,
                 "suitability_rank": 1 if vol_regime in ["HIGH_IV", "EXTREME_IV"] else 2,
                 "regime_fit": "Optimal for Bearish Resistance with High Option Premiums",
                 "category": "BEARISH",
@@ -175,7 +191,8 @@ class StrategyRecommender:
             })
 
         # 5. Rangebound / Neutral High IV -> Iron Condor
-        if trend_bias in ["NEUTRAL", "RANGEBOUND", "HIGH_VOLATILITY_CHOP"]:
+        fits_neutral = trend_bias in ["NEUTRAL", "RANGEBOUND", "HIGH_VOLATILITY_CHOP"]
+        if fits_neutral or include_all:
             # Iron Condor (Sell OTM Put + Buy Far OTM Put; Sell OTM Call + Buy Far OTM Call)
             put_sell = atm_strike - 250.0
             put_buy = put_sell - 200.0
@@ -197,6 +214,8 @@ class StrategyRecommender:
 
             candidate_strategies.append({
                 "strategy_name": "4-Leg Defined Iron Condor",
+                "legs": legs,
+                "fits_regime": fits_neutral,
                 "suitability_rank": 1,
                 "regime_fit": "Master Strategy for Rangebound Consolidation & Theta Decay Collection",
                 "category": "NEUTRAL",
@@ -231,6 +250,8 @@ class StrategyRecommender:
 
             candidate_strategies.append({
                 "strategy_name": "Iron Butterfly (ATM Theta Pin)",
+                "legs": ib_legs,
+                "fits_regime": fits_neutral,
                 "suitability_rank": 2,
                 "regime_fit": "High Reward:Risk Pin Strategy when Nifty is pinned near Max Pain",
                 "category": "NEUTRAL",
@@ -247,11 +268,13 @@ class StrategyRecommender:
                 "containment_protection": "Wing hedges guarantee max risk cannot exceed ₹{:.0f}.".format(ib_profile["max_loss_inr"]),
             })
 
-        # Sort candidate strategies by suitability rank
-        candidate_strategies = sorted(candidate_strategies, key=lambda s: s["suitability_rank"])
+        # Strategies that fit today's regime first, then by suitability rank.
+        candidate_strategies = sorted(candidate_strategies,
+                                      key=lambda s: (not s["fits_regime"], s["suitability_rank"]))
+        fitting = [s for s in candidate_strategies if s["fits_regime"]]
 
         return {
             "regime_summary": regime,
             "recommended_strategies": candidate_strategies,
-            "top_strategy": candidate_strategies[0] if candidate_strategies else None,
+            "top_strategy": fitting[0] if fitting else None,
         }

@@ -719,6 +719,56 @@ with tab_risk:
                     unsafe_allow_html=True)
         st.caption("Open interest comes from the app's simulated option chain, so PCR and max pain are illustrative.")
 
+    # --- Row 4: every defined-risk strategy, addable to the portfolio ---
+    def _strategy_card(strat: dict, key_prefix: str, min_height: int = 0) -> None:
+        prof = strat["profile"]
+        credit = prof["net_premium_total_inr"]
+        flow = (f"Collect ₹{credit:,.0f} credit" if credit > 0 else f"Pay ₹{abs(credit):,.0f} debit")
+        breakevens = ", ".join(f"{b:,.0f}" for b in prof["breakeven_points"]) or "—"
+        legs_html = "".join(f"<li>{leg}</li>" for leg in strat["legs_detail"])
+        fit_badge = ("<span class='pill-badge pill-optimal'>Fits today</span>" if strat["fits_regime"]
+                     else f"<span class='pill-badge' style='background: #2E2C29; color: #A39E93;'>{strat['category'].title()}</span>")
+        st.markdown(f"""
+        <div class="clean-card" style="min-height: {min_height}px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px;">
+                <div style="font-size: 1.05rem; font-weight: 700;">{strat['strategy_name']}</div>{fit_badge}
+            </div>
+            <div style="font-size: 0.82rem; color: #A39E93; margin: 4px 0 8px;">{strat['regime_fit']}</div>
+            <ul style="font-size: 0.85rem; margin: 0 0 10px 18px; padding: 0;">{legs_html}</ul>
+            <div style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.82rem;">
+                <div><span style="color:#A39E93;">Max profit</span><br><b class="val-green">₹{prof['max_profit_inr']:,.0f}</b></div>
+                <div><span style="color:#A39E93;">Max loss</span><br><b class="val-red">₹{prof['max_loss_inr']:,.0f}</b></div>
+                <div><span style="color:#A39E93;">Breakeven</span><br><b>{breakevens}</b></div>
+            </div>
+            <div style="font-size: 0.8rem; color: #A39E93; margin-top: 8px;">{flow} · {len(strat['legs'])} legs of {strat['legs'][0].quantity} qty</div>
+        </div>""", unsafe_allow_html=True)
+        if st.button(f"+ Add {strat['strategy_name']} to portfolio", key=f"{key_prefix}_{strat['strategy_name']}",
+                     width="stretch"):
+            portfolio = st.session_state.portfolio_manager
+            for leg in strat["legs"]:
+                portfolio.add_position(strike=leg.strike, option_type=leg.option_type, action=leg.action,
+                                       quantity=leg.quantity, entry_price=leg.premium,
+                                       symbol=f"NIFTY {int(leg.strike)} {leg.option_type.value}")
+            st.toast(f"Added {strat['strategy_name']} ({len(strat['legs'])} legs) to your portfolio.")
+
+    st.divider()
+    st.markdown("#### Every defined-risk strategy")
+    st.write("Each one caps the worst-case loss in advance. Add any of them to the Active Portfolio tab "
+             "to track it live; legs are added at today's model price.")
+    fitting = [s for s in snap["strategies"] if s["fits_regime"]]
+    others = [s for s in snap["strategies"] if not s["fits_regime"]]
+    if fitting:
+        for col, strat in zip(st.columns(max(len(fitting), 2)), fitting):
+            with col:
+                _strategy_card(strat, "fit")
+    else:
+        st.info("No strategy fits today's regime cleanly. The options below suit other market conditions.")
+    with st.expander(f"Strategies for other market conditions ({len(others)})"):
+        for row_start in range(0, len(others), 3):
+            for col, strat in zip(st.columns(3), others[row_start:row_start + 3]):
+                with col:
+                    _strategy_card(strat, "other", min_height=330)
+
 
 # ==============================================================================
 # TAB 2: OPTION SAFETY & HEALTH SCANNER (OPTION CHAIN)

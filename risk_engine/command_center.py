@@ -124,7 +124,7 @@ def build_risk_snapshot(
     recs = StrategyRecommender.get_recommendations(
         nifty_spot=spot, india_vix=vix, iv_percentile=inputs["iv_percentile"],
         ema_20=ema_20, ema_50=ema_50, pcr_oi=inputs["pcr_oi"], max_pain=inputs["max_pain"],
-        days_to_expiry=days_to_expiry,
+        days_to_expiry=days_to_expiry, include_all=True,
     )
     # The recommender doesn't take ADX; re-classify with it so the regime card is complete.
     regime = MarketRegimeClassifier.classify_regime(
