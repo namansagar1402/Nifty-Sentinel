@@ -1,138 +1,144 @@
-# 🛡️ NIFTY SENTINEL
-### Predictive Drawdown Containment System & Options Alpha Optimizer for Nifty 50 F&O
+# sentinel.
+### Predictive Drawdown Containment System for Nifty 50 F&O traders
+
+DTU B.Tech minor project · Department of Applied Mathematics
+Team: Lokesh Godara (23/MC/082), Naman Sagar (23/MC/093), Navdeep Singh (23/MC/094) · Guide: Prof. L. N. Das
 
 ---
 
-## 📌 Executive Summary
-**NIFTY SENTINEL** is a quantitative risk containment and behavioral analytics platform specifically engineered for Indian retail and proprietary Nifty 50 F&O derivatives traders.
+## Why
 
-According to SEBI studies, **93% of individual F&O options traders in India lose money**, primarily due to unconstrained intraday drawdowns, revenge trading, overtrading spikes, and holding decaying out-of-the-money (OTM) options to zero.
+A SEBI study of individual traders in the equity F&O segment (FY22 to FY24) found that **93% lost money**.
+Most of those losses come from behaviour, not bad luck: revenge trading, overtrading, holding bought options
+into expiry while time decay eats them, and letting losses run bigger than wins.
 
-**Nifty Sentinel solves this through two powerful engines**:
-1. **Behavioral Leakage Auditor & Counterfactual Engine**: Ingests broker tradebooks (Zerodha, Groww, Dhan, Angel One, Upstox) and diagnoses the exact psychological traps causing losses, simulating the "What-If" equity curve under strict containment rules.
-2. **Predictive Drawdown & Market Regime Strategy Selector**: Employs 1,000-path Monte Carlo simulations, Value-at-Risk (VaR / Expected Shortfall), and Nifty market regime detection (India VIX, IV Percentile, PCR, Max Pain) to enforce real-time circuit breakers and recommend defined-risk multi-leg option strategies (Spreads, Condors, Butterflies).
+Nifty Sentinel has two engines in one dashboard:
 
----
-
-## 🚀 Key Features
-
-### 1. 📊 Executive PnL Journey & Quantitative Auditing
-- Realized Net PnL, Win Rate %, Profit Factor, Expectancy per trade.
-- Interactive **Underwater Drawdown curve** with peak high-water-mark tracking.
-- Segmented diagnostics: Call (CE) vs Put (PE), Option Buyers vs Sellers, Expiry (0-DTE) vs Non-Expiry.
-
-### 2. 🔍 6-Point Behavioral Leakage Diagnostics
-- **😡 Revenge Trading Trap**: Flags rapid re-entries (<15 mins) after losses and quantifies total capital drained.
-- **📈 Overtrading Frequency Decay**: Identifies the threshold where daily trade count degrades win rate and balloons commissions.
-- **⏳ 0-DTE Expiry Theta Crush**: Audits long options held into expiry decay and quantifies preventable losses.
-- **📉 Martingale / Loss Averaging**: Detects doubling down on falling option premiums.
-- **⚖️ Risk-to-Reward Inversion**: Analyzes asymmetric payoff profiles where 1 loss wipes out 4 wins.
-- **Behavioral Discipline Score (0–100)** with actionable behavioral prescriptions.
-
-### 3. ⚖️ "What-If" Counterfactual Simulation
-- Interactively re-executes past trades under rule-based constraints:
-  - Daily Drawdown Hard Stop (e.g. 1.5% or ₹3,000 max daily loss).
-  - Maximum trades per day limit (e.g. max 3 trades/day).
-  - Option Premium Stop-Loss Cap (e.g. 30% max loss per trade).
-- Shows exact **₹ Capital Saved**, **Drawdown Reduction %**, and **Taxes/Brokerage Saved**.
-
-### 4. 🔮 Predictive Monte Carlo & Tail Risk Engine
-- **1,000-Path Bootstrap Monte Carlo**: Forecasts the 5th, 25th, 50th (median), 75th, and 95th percentile equity cones over the next 50-250 trades.
-- **Probability of Ruin / Account Distress %**.
-- **95% Worst-Case Maximum Drawdown**.
-- **1-Day 95% and 99% Value-at-Risk (VaR)** & **Conditional VaR (Expected Shortfall)**.
-
-### 5. 🧭 Nifty 50 Market Regime & Defined-Risk Strategy Optimizer
-- **Market Regime Classifier**: Combines Nifty Spot, 20/50 EMAs, ADX, India VIX, IV Percentile, PCR, and Max Pain.
-- **Defined-Risk Strategies**:
-  - *Bull Call Debit Spread* (Bullish + Low IV)
-  - *Bull Put Credit Spread* (Bullish + High IV)
-  - *Bear Put Debit Spread* (Bearish + Low IV)
-  - *Bear Call Credit Spread* (Bearish + High IV)
-  - *4-Leg Defined Iron Condor* (Rangebound + High IV)
-  - *Iron Butterfly ATM Theta Pin* (Pinning at Max Pain)
-- **Interactive Multi-Leg Payoff Diagram** with Expiry and T+0 Greeks curves.
-- **Fractional Kelly Position Sizer**: Calculates exact lot sizes and ₹ risk based on mathematical edge.
+1. **Behavioural auditor (looks back):** reads a broker tradebook, finds the habits costing money, and replays
+   the history with a daily stop-loss to show what would have been saved.
+2. **Predictive containment (looks forward):** reads the live market, forecasts possible losses, and says
+   whether to trade at all, how big, and which defined-risk strategy fits today.
 
 ---
 
-## 🛠️ Installation & Running the Dashboard
+## The dashboard: six tabs
 
-### Prerequisites
-- Python 3.10+ (Tested on Python 3.13)
+| Tab | What it does |
+|---|---|
+| **Nifty 50 Price Chart** | Live candles with EMA 20/50 and the **expected-move band**: the 68% range India VIX implies for today, flagging unusually large moves. |
+| **Risk Command Center** | Circuit breaker (green / amber / red), 1-day VaR and expected shortfall, probability of ruin, a 1,000-path **Monte Carlo** cone, market regime, quarter-Kelly position size, and **all six defined-risk strategies** with one-click "add to portfolio". |
+| **Option Safety & Chain** | Option chain for any **upcoming expiry** (weekly Tuesdays, monthly last Tuesday), OPTIMAL / SPECULATIVE / HAZARDOUS verdicts with **Greeks and the reason** for each, and an open-interest chart with max pain, support and resistance. |
+| **Trade Tester** | TAKE / HEDGE / DROP verdict, a **second opinion from the ML model**, the trade's worst case against today's **daily loss limit**, and a **P&L heatmap** of Nifty moves against days to expiry. |
+| **Active Portfolio** | Positions **saved between sessions**, strategies **grouped** with one "Close strategy" button, **Greeks in plain words** ("if Nifty rises 1% you gain about ₹8,900"), stop-loss / target alerts, CSV download, payoff chart, and the tradebook audit (discipline score, habits found, money a daily stop would have saved). |
+| **ML & Backtest Analysis** | Take/drop models trained on **real Nifty history** (or simulated trades): Random Forest vs gradient boosting vs a logistic baseline, ROC curves, a backtest with a **confidence slider**, and **"Why this prediction?"** per-feature explanations. |
 
-### 1. Install Dependencies
+Above the tabs: a **tradebook upload** (CSV / Excel from Zerodha, Groww, Dhan, Angel One, Upstox) that replaces
+the sample in the audit and risk tabs, and a **Demo mode** switch for offline presenting.
+
+---
+
+## Running it
+
+Requires Python 3.10+ (tested on 3.13).
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Run the Interactive Web Dashboard
 ```bash
 streamlit run ui/app.py
 ```
-Open your browser at `http://localhost:8501`.
+
+Open `http://localhost:8501`.
 
 ### Offline demo mode (for presentations)
-The day before presenting, with internet, save today's market data:
+The evening before presenting, with internet:
 ```bash
 python scripts/save_market_snapshot.py
 ```
-Then switch on **Demo mode (offline)** under the logo. The app uses `data/market_snapshot/` and never
-touches the network. Every price shows a badge: **Live** (Yahoo Finance), **Cached** (saved snapshot) or
-**Simulated** (no feed and no snapshot). If the live feed drops mid-demo, the app falls back to the
-snapshot automatically.
+This saves today's market data and 5 years of daily Nifty / India VIX history to `data/market_snapshot/`.
+Then switch on **Demo mode (offline)** under the logo: the app never touches the network. Every price carries
+a badge: **Live** (Yahoo Finance), **Cached** (saved snapshot) or **Simulated** (no feed and no snapshot).
+If the live feed drops mid-demo, the app falls back to the snapshot on its own.
 
-### 3. Run Automated Unit Tests
+### Saved portfolio
+Positions are saved to `data/portfolio.json` (not committed to git). Set `SENTINEL_PORTFOLIO_PATH` to use a
+different file; the test suite does this so it never touches your real portfolio.
+
+### Tests
 ```bash
-python -m unittest discover -s tests -p "test_*.py" -v
+python -m unittest discover -s tests -p "test_*.py"
 ```
+115 tests, including headless runs that click through every tab.
 
 ---
 
-## 📁 Project Architecture
+## Machine learning: results and honest limits
 
-The dashboard (`ui/app.py`) has six tabs: **Nifty 50 Price Chart**, **Risk Command Center**, **Option Safety & Chain**,
-**Trade Tester**, **Active Portfolio**, and **ML & Backtest Analysis**.
+**Data.** 33,990 option trades built from 1,230 trading days of real Nifty 50 and India VIX (Nov 2021 to
+Nov 2026). Each day: calls and puts at 5 strikes (−2% to +2% from spot) and 3 expiries (2, 7, 14 days),
+priced with Black-Scholes at that day's close and VIX, held to expiry, and labelled by what Nifty actually did.
+
+**Evaluation.** Trained on trades before 5 May 2026 and tested on the 3,470 trades after it. Training trades
+still open at the cutoff are removed so nothing leaks from the future; cross-validation is time-ordered.
+
+| Unseen trades, May–Nov 2026 | Random Forest | Gradient boosting | Logistic baseline |
+|---|---|---|---|
+| ROC-AUC | **0.688** | 0.684 | 0.681 |
+| Time-ordered CV ROC-AUC | 0.691 | 0.671 | 0.695 |
+
+Only 30.7% of bought options were profitable; among trades the Random Forest rates 40% or more, 45.9% were.
+
+**Backtest** (₹20 lakh, 1 lot per trade, real P&L): taking every trade wipes the account out after 934 trades;
+a rule filter after 743; the ML filter at 40% confidence survives at −₹2.1 lakh, and at 45% ends +₹2.8 lakh.
+The 45% bar was chosen after seeing these results, so it is optimistic; live use must fix it in advance.
+
+**Limits.** The signal is real but modest (ROC-AUC about 0.69). Option open interest in the chain is simulated.
+The model covers bought options held to expiry. A "Simulated trades" switch in the ML tab shows the original
+formula-based dataset for comparison.
+
+---
+
+## Project structure
 
 ```
 ├── core/
-│   ├── models.py              # Data structures for Trades, Contracts, Greeks & Regimes
-│   ├── greeks.py              # Vectorized Black-Scholes pricing & Greeks engine
-│   ├── option_evaluator.py    # Take/drop verdict for a single option trade (theta burn, scenarios)
-│   └── portfolio.py           # Active positions book with live mark-to-market PnL
+│   ├── models.py              # Trades, contracts, Greeks, regimes
+│   ├── greeks.py              # Black-Scholes pricing and Greeks
+│   ├── option_evaluator.py    # Verdicts (named thresholds), scenarios, P&L heatmap grid
+│   ├── expiry.py              # Upcoming Nifty expiries (weekly Tuesday, monthly last Tuesday)
+│   └── portfolio.py           # Positions, groups, saving, MTM, Greeks in words, stop/target alerts
 ├── data_feed/
-│   ├── market_source.py       # Live → snapshot → simulated data chain with source labels (Demo mode)
-│   └── live_feed.py           # Nifty spot / India VIX / option chain via yfinance (synthetic fallback offline)
+│   ├── live_feed.py           # Nifty / India VIX via yfinance, option chain (simulated OI)
+│   └── market_source.py       # Live → snapshot → simulated chain with source labels (Demo mode)
 ├── trade_analyzer/
-│   ├── parser.py              # Multi-broker tradebook parser (Zerodha, Groww, Dhan, Angel One, CSV)
-│   ├── metrics.py             # Performance statistics (Win rate, Expectancy, Sharpe, Max Drawdown)
-│   ├── leakage_detector.py    # 6-point behavioral diagnostics (Revenge trading, Overtrading, etc.)
-│   └── counterfactual.py      # "What-If" simulator: Re-executes history with risk caps
+│   ├── parser.py              # Multi-broker tradebook parser
+│   ├── upload.py              # Safe CSV / Excel upload with friendly errors
+│   ├── metrics.py             # Win rate, expectancy, drawdown
+│   ├── leakage_detector.py    # Revenge trading, overtrading, expiry decay, risk-reward habits
+│   └── counterfactual.py      # What-if replay with a daily stop
 ├── risk_engine/
-│   ├── var_cvar.py            # Historical, Parametric VaR, and Expected Shortfall
-│   ├── monte_carlo.py         # Monte Carlo forward simulation & Probability of Ruin
-│   ├── containment.py         # Intraday Circuit Breaker & Fractional Kelly Sizer
-│   └── command_center.py      # Combines all risk engines into one snapshot for the Risk Command Center tab
+│   ├── var_cvar.py            # Historical / parametric VaR and expected shortfall
+│   ├── monte_carlo.py         # Bootstrap Monte Carlo and probability of ruin
+│   ├── containment.py         # Circuit breaker, adaptive daily limit, Kelly sizing
+│   ├── command_center.py      # One snapshot of every risk engine for the Risk Command Center
+│   ├── expected_move.py       # VIX-implied expected range
+│   └── trade_budget.py        # Does a trade fit today's loss limit?
 ├── strategy_optimizer/
-│   ├── regime_classifier.py   # Nifty market regime detection (Trend, VIX, PCR, Max Pain)
-│   ├── payoff_calculator.py   # Multi-leg option payoff & Greeks curves
-│   └── strategy_recommender.py# Defined-risk strategy recommendation engine
+│   ├── regime_classifier.py   # Trend, volatility, PCR, max pain
+│   ├── payoff_calculator.py   # Multi-leg payoff and Greeks
+│   └── strategy_recommender.py# Six defined-risk strategies with real legs
 ├── ml_engine/
-│   ├── synthetic_data.py      # Seeded synthetic option-trade generator (features + profit label)
-│   ├── classifier.py          # Random Forest take/drop classifier (trained on seed 42)
-│   └── evaluation.py          # ROC-AUC, precision/recall, confusion matrix, k-fold CV vs a logistic baseline (unseen seed 99)
+│   ├── real_data.py           # Trades from real Nifty / VIX history, time split
+│   ├── synthetic_data.py      # Simulated trades (seeded)
+│   ├── classifier.py          # Random Forest take/drop model
+│   ├── evaluation.py          # Three-model comparison, ROC, CV
+│   └── explain.py             # Exact per-feature contributions for a prediction
 ├── backtesting/
-│   └── engine.py              # Baseline vs rule-based vs ML filter backtest (out-of-sample, seed 7)
-├── data/
-│   ├── sample_zerodha_trades.csv # Realistic sample tradebook with retail flaws
-│   └── sample_nifty_market_data.json # Sample market data
-├── ui/
-│   └── app.py                 # Streamlit interactive dark financial terminal
-└── tests/                     # unittest suite, incl. a headless check that every tab renders
+│   ├── engine.py              # Simulated-trade backtest
+│   └── threshold.py           # Backtest at a chosen confidence, stops at account wipe-out
+├── scripts/save_market_snapshot.py
+├── data/                      # Sample tradebook, market snapshot, saved portfolio
+├── ui/app.py                  # Streamlit dashboard (charcoal and gold theme)
+└── tests/                     # 115 unittest tests
 ```
-
-### ⚠️ About the ML backtest
-The ML model and backtest use **synthetic** trades produced by a scoring formula, with a fixed
-₹5,000 win / ₹3,000 loss per trade. The model is trained on one random draw (seed 42) and the
-backtest runs on an independent draw (seed 7) it has never seen. Results show how well the model
-learns the simulated pattern, not proven performance on real Nifty markets.
