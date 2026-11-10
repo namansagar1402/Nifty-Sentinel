@@ -34,7 +34,8 @@ from trade_analyzer.metrics import PerformanceMetrics
 from trade_analyzer.leakage_detector import LeakageDetector
 from trade_analyzer.counterfactual import CounterfactualSimulator
 from risk_engine.monte_carlo import MonteCarloEngine
-from risk_engine.command_center import build_risk_snapshot, DEFAULT_STOP_LOSS_POINTS
+from risk_engine.command_center import build_risk_snapshot, compute_max_pain, DEFAULT_STOP_LOSS_POINTS
+from core.expiry import upcoming_expiries
 from trade_analyzer.upload import (TradebookLoad, load_tradebook_bytes, SUPPORTED_BROKERS,
                                    REQUIRED_COLUMNS_HINT)
 
@@ -774,57 +775,80 @@ with tab_risk:
 # TAB 2: OPTION SAFETY & HEALTH SCANNER (OPTION CHAIN)
 # ==============================================================================
 with tab2:
-# --- Scanner Section ---
     st.markdown("#### Option Safety & Health Scanner (Option Chain)")
     st.write("Evaluate live health across the option chain and instantly add trades to your portfolio.")
+
+    # --- Controls: expiry and detail level ---
+    expiries = upcoming_expiries(datetime.date.today())
+    ctl_exp, ctl_greeks = st.columns([2, 1])
+    with ctl_exp:
+        expiry_by_label = {e.label: e for e in expiries}
+        chosen_expiry = expiry_by_label[st.selectbox("Expiry", list(expiry_by_label), key="chain_expiry")]
+    with ctl_greeks:
+        st.markdown("<div style='height: 30px;'></div>", unsafe_allow_html=True)
+        show_greeks = st.toggle("Show Greeks and reasons", key="chain_show_greeks")
+    # On expiry day about a quarter of a trading day's time value is left on average.
+    chain_dte = chosen_expiry.days_to_expiry if chosen_expiry.days_to_expiry > 0 else 0.25
+    st.caption(f"Pricing for expiry {chosen_expiry.expiry:%A %d %B %Y}. Nifty weekly options expire on Tuesdays "
+               "and the monthly on the last Tuesday; exchange holidays that move an expiry are not adjusted.")
 
     atm_base = round(live_spot / 50.0) * 50.0
     strike_list = [int(atm_base + i * 50) for i in range(-5, 6)]
 
+    # Simulated open interest for the same strikes: max pain and the biggest OI walls.
+    oi_chain = LiveDataFeed.generate_live_option_chain(live_spot, live_vix, days_to_expiry=chain_dte,
+                                                       num_strikes_each_side=5)
+    max_pain_strike = int(compute_max_pain(oi_chain))
+    resistance_strike = int(oi_chain.loc[oi_chain["ce_oi"].idxmax(), "strike"])
+    support_strike = int(oi_chain.loc[oi_chain["pe_oi"].idxmax(), "strike"])
+    strike_tags = {}
+    for tag_strike, tag in ((max_pain_strike, "Max pain"), (resistance_strike, "Resistance"),
+                            (support_strike, "Support")):
+        strike_tags.setdefault(tag_strike, []).append(tag)
+
     st.markdown("<br>", unsafe_allow_html=True)
-    
+
     # Header Row
+    head_style = "color: #A39E93; font-size: 0.8rem; font-weight: 700; white-space: nowrap;"
     h1, h2, h3, h4, h5, h6 = st.columns([1.5, 2.5, 1.5, 2.5, 1.5, 2])
-    h1.markdown("<div style='text-align: right; color: #A39E93; font-size: 0.8rem; font-weight: 700; white-space: nowrap;'>Call LTP</div>", unsafe_allow_html=True)
-    h2.markdown("<div style='text-align: right; color: #A39E93; font-size: 0.8rem; font-weight: 700; white-space: nowrap;'>Call Verdict</div>", unsafe_allow_html=True)
-    h3.markdown("<div style='text-align: center; color: #A39E93; font-size: 0.8rem; font-weight: 700; white-space: nowrap;'>Strike</div>", unsafe_allow_html=True)
-    h4.markdown("<div style='text-align: left; color: #A39E93; font-size: 0.8rem; font-weight: 700; white-space: nowrap;'>Put Verdict</div>", unsafe_allow_html=True)
-    h5.markdown("<div style='text-align: left; color: #A39E93; font-size: 0.8rem; font-weight: 700; white-space: nowrap;'>Put LTP</div>", unsafe_allow_html=True)
-    h6.markdown("<div style='text-align: center; color: #A39E93; font-size: 0.8rem; font-weight: 700; white-space: nowrap;'>Action</div>", unsafe_allow_html=True)
-    
+    h1.markdown(f"<div style='text-align: right; {head_style}'>Call LTP</div>", unsafe_allow_html=True)
+    h2.markdown(f"<div style='text-align: right; {head_style}'>Call Verdict</div>", unsafe_allow_html=True)
+    h3.markdown(f"<div style='text-align: center; {head_style}'>Strike</div>", unsafe_allow_html=True)
+    h4.markdown(f"<div style='text-align: left; {head_style}'>Put Verdict</div>", unsafe_allow_html=True)
+    h5.markdown(f"<div style='text-align: left; {head_style}'>Put LTP</div>", unsafe_allow_html=True)
+    h6.markdown(f"<div style='text-align: center; {head_style}'>Action</div>", unsafe_allow_html=True)
+
     st.markdown("<hr style='margin: 5px 0px 10px 0px; border-top: 1px solid rgba(237, 234, 226, 0.12);'>", unsafe_allow_html=True)
 
+    price_style = ("font-weight: 600; font-family: Manrope, sans-serif; font-variant-numeric: tabular-nums; "
+                   "font-size: 1.1rem; color: #EDEAE2; padding-top: 5px;")
+    pill_for = {"OPTIMAL": "pill-optimal", "SPECULATIVE": "pill-speculative"}
+
+    def _greeks_line(ev: dict, side: str) -> str:
+        return (f"<b style='color: #EDEAE2;'>{side}</b> Δ {ev['delta']:+.2f} · θ −₹{abs(ev['theta_daily_inr']):,.1f}/day "
+                f"({ev['daily_theta_burn_pct']:.1f}% of premium) · IV {ev['iv_percent']:.1f}%<br>"
+                f"<span style='color: #A39E93;'>{ev['summary']}</span>")
+
     for strike in strike_list:
-        c_eval = OptionEvaluator.evaluate_option_health(live_spot, strike, OptionType.CALL, TradeAction.BUY, 5, live_vix)
-        p_eval = OptionEvaluator.evaluate_option_health(live_spot, strike, OptionType.PUT, TradeAction.BUY, 5, live_vix)
-        
-        c_rating = c_eval["health_rating"]
-        p_rating = p_eval["health_rating"]
-        
-        c_pill = "pill-optimal" if c_rating == "OPTIMAL" else ("pill-speculative" if c_rating == "SPECULATIVE" else "pill-hazardous")
-        p_pill = "pill-optimal" if p_rating == "OPTIMAL" else ("pill-speculative" if p_rating == "SPECULATIVE" else "pill-hazardous")
-        
+        c_eval = OptionEvaluator.evaluate_option_health(live_spot, strike, OptionType.CALL, TradeAction.BUY, chain_dte, live_vix)
+        p_eval = OptionEvaluator.evaluate_option_health(live_spot, strike, OptionType.PUT, TradeAction.BUY, chain_dte, live_vix)
+        c_pill = pill_for.get(c_eval["health_rating"], "pill-hazardous")
+        p_pill = pill_for.get(p_eval["health_rating"], "pill-hazardous")
+
         col1, col2, col3, col4, col5, col6 = st.columns([1.5, 2.5, 1.5, 2.5, 1.5, 2])
-        
-        # Call Premium
-        col1.markdown(f"<div style='text-align: right; font-weight: 600; font-family: 'Manrope', sans-serif; font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #EDEAE2; padding-top: 5px;'>₹{c_eval['premium']:.1f}</div>", unsafe_allow_html=True)
-        
-        # Call Verdict
+        col1.markdown(f"<div style='text-align: right; {price_style}'>₹{c_eval['premium']:.1f}</div>", unsafe_allow_html=True)
         col2.markdown(f"<div style='text-align: right; padding-top: 5px;'><span class='pill-badge {c_pill}' style='font-size:0.75rem; padding: 4px 8px;'>{c_eval['health_badge']}</span></div>", unsafe_allow_html=True)
-        
-        # Strike (Center)
+
+        tags_html = "".join(f"<div style='font-size: 0.68rem; font-weight: 700; color: #D4AF37; line-height: 1.2;'>{t}</div>"
+                            for t in strike_tags.get(strike, []))
         if strike == atm_base:
-            col3.markdown(f"<div style='text-align: center; font-weight: 800; font-size: 1.2rem; color: #B9B2A3; background: #2E2C29; border-radius: 4px; padding: 2px 0px;'>{strike}</div>", unsafe_allow_html=True)
+            col3.markdown(f"<div style='text-align: center; font-weight: 800; font-size: 1.2rem; color: #121212; background: #EDEAE2; border-radius: 6px; padding: 2px 0px;'>{strike}<div style='font-size: 0.68rem; font-weight: 700; color: #5C5850;'>ATM</div></div>{tags_html}", unsafe_allow_html=True)
         else:
-            col3.markdown(f"<div style='text-align: center; font-weight: 700; font-size: 1.1rem; color: #EDEAE2; padding-top: 5px;'>{strike}</div>", unsafe_allow_html=True)
-            
-        # Put Verdict
+            col3.markdown(f"<div style='text-align: center; font-weight: 700; font-size: 1.1rem; color: #EDEAE2; padding-top: 5px;'>{strike}{tags_html}</div>", unsafe_allow_html=True)
+
         col4.markdown(f"<div style='text-align: left; padding-top: 5px;'><span class='pill-badge {p_pill}' style='font-size:0.75rem; padding: 4px 8px;'>{p_eval['health_badge']}</span></div>", unsafe_allow_html=True)
-        
-        # Put Premium
-        col5.markdown(f"<div style='text-align: left; font-weight: 600; font-family: 'Manrope', sans-serif; font-variant-numeric: tabular-nums; font-size: 1.1rem; color: #EDEAE2; padding-top: 5px;'>₹{p_eval['premium']:.1f}</div>", unsafe_allow_html=True)
-        
-        # Action Buttons
+        col5.markdown(f"<div style='text-align: left; {price_style}'>₹{p_eval['premium']:.1f}</div>", unsafe_allow_html=True)
+
         with col6:
             b1, b2 = st.columns(2)
             if b1.button("+ CE", key=f"add_ce_{strike}"):
@@ -833,8 +857,45 @@ with tab2:
             if b2.button("+ PE", key=f"add_pe_{strike}"):
                 st.session_state.portfolio_manager.add_position(float(strike), OptionType.PUT, TradeAction.BUY, 50, p_eval['premium'], f"NIFTY {strike} PE")
                 st.toast(f"Added NIFTY {strike} PE to Portfolio!")
-                
+
+        if show_greeks:
+            g_call, g_put = st.columns(2)
+            g_call.markdown(f"<div style='font-size: 0.8rem; line-height: 1.5; padding: 2px 0 6px;'>{_greeks_line(c_eval, 'CE')}</div>", unsafe_allow_html=True)
+            g_put.markdown(f"<div style='font-size: 0.8rem; line-height: 1.5; padding: 2px 0 6px;'>{_greeks_line(p_eval, 'PE')}</div>", unsafe_allow_html=True)
+
         st.markdown("<hr style='margin: 2px 0px; padding: 0px; border-top: 1px solid #2E2C29;'>", unsafe_allow_html=True)
+
+    # --- Open interest by strike ---
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("#### Open interest by strike")
+    oi_sorted = oi_chain.sort_values("strike")
+    oi_labels = [str(int(k)) for k in oi_sorted["strike"]]
+    fig_oi = go.Figure()
+    fig_oi.add_trace(go.Bar(y=oi_labels, x=-oi_sorted["ce_oi"], orientation="h", name="Call OI (resistance)",
+                            marker_color="#FF8A73", customdata=oi_sorted["ce_oi"],
+                            hovertemplate="Strike %{y}<br>Call OI %{customdata:,}<extra></extra>"))
+    fig_oi.add_trace(go.Bar(y=oi_labels, x=oi_sorted["pe_oi"], orientation="h", name="Put OI (support)",
+                            marker_color="#5FD39A",
+                            hovertemplate="Strike %{y}<br>Put OI %{x:,}<extra></extra>"))
+    # On a category axis a numeric-looking label is read as a slot number, so place by position.
+    max_pain_pos = oi_labels.index(str(max_pain_strike)) if str(max_pain_strike) in oi_labels else None
+    if max_pain_pos is not None:
+        fig_oi.add_shape(type="line", xref="paper", x0=0, x1=1, yref="y", y0=max_pain_pos, y1=max_pain_pos,
+                         line=dict(color="#D4AF37", width=2, dash="dash"))
+        fig_oi.add_annotation(xref="paper", x=1, yref="y", y=max_pain_pos, text=f"Max pain {max_pain_strike}",
+                              showarrow=False, xanchor="right", yanchor="bottom", font=dict(color="#D4AF37", size=12))
+    max_oi = float(max(oi_sorted["ce_oi"].max(), oi_sorted["pe_oi"].max())) * 1.1
+    fig_oi.update_layout(template="plotly_dark", paper_bgcolor="#121212", plot_bgcolor="#1E1D1B", height=420,
+                         barmode="overlay", bargap=0.25, margin=dict(l=10, r=10, t=10, b=40),
+                         xaxis=dict(range=[-max_oi, max_oi], title="← Calls · contracts · Puts →",
+                                    tickvals=[-max_oi * 0.6, 0, max_oi * 0.6],
+                                    ticktext=[f"{max_oi * 0.6:,.0f}", "0", f"{max_oi * 0.6:,.0f}"]),
+                         yaxis=dict(title="Strike", type="category"),  # strikes are labels, not a number scale
+                         legend=dict(orientation="h", yanchor="top", y=-0.15, xanchor="center", x=0.5))
+    st.plotly_chart(fig_oi, width="stretch")
+    st.caption(f"Biggest call wall at {resistance_strike} (likely resistance), biggest put wall at {support_strike} "
+               f"(likely support), max pain at {max_pain_strike}. Open interest here is simulated for the demo; "
+               "prices and Greeks come from live spot and India VIX.")
 
 # ==============================================================================
 # TAB 3: TRADE TESTER (SHOULD I TAKE OR DROP?)

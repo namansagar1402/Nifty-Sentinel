@@ -147,6 +147,7 @@ class LiveDataFeed:
     ) -> pd.DataFrame:
         """
         Generates a comprehensive live Nifty option chain with pricing, Greeks, IV skew, and Open Interest.
+        Prices and Greeks are Black-Scholes from live spot and VIX; open interest is simulated.
         """
         atm_strike = round(spot_price / float(strike_step)) * strike_step
         start_strike = atm_strike - (num_strikes_each_side * strike_step)
@@ -172,8 +173,10 @@ class LiveDataFeed:
             round_bonus = 1.6 if (k % 500 == 0) else (1.25 if (k % 100 == 0) else 1.0)
             dist_factor = max(0.2, 1.0 - abs(moneyness - 1.0) * 8.0)
 
-            ce_oi = int(120000 * dist_factor * round_bonus * np.random.uniform(0.85, 1.15))
-            pe_oi = int(135000 * dist_factor * round_bonus * np.random.uniform(0.85, 1.15))
+            # Simulated OI: seeded per strike so it stays stable between page refreshes.
+            oi_rng = np.random.default_rng(int(k))
+            ce_oi = int(120000 * dist_factor * round_bonus * oi_rng.uniform(0.85, 1.15))
+            pe_oi = int(135000 * dist_factor * round_bonus * oi_rng.uniform(0.85, 1.15))
 
             # Determine Moneyness tag
             if k < spot_price - 25:

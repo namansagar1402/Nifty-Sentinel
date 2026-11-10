@@ -47,5 +47,19 @@ class TestAddStrategyToPortfolio(unittest.TestCase):
         self.assertEqual(len(at.session_state["portfolio_manager"].positions), before + 4)
 
 
+class TestOptionChainControls(unittest.TestCase):
+    def test_greeks_toggle_and_later_expiry_render(self):
+        at = AppTest.from_file(str(APP_PATH), default_timeout=180)
+        at.session_state["demo_mode"] = True
+        at.run()
+        at.toggle(key="chain_show_greeks").set_value(True)
+        box = at.selectbox(key="chain_expiry")
+        box.select_index(len(box.options) - 1).run()
+        self.assertEqual([e.value for e in at.exception], [])
+        text = " ".join(m.value for m in at.markdown)
+        self.assertIn("% of premium", text)
+        self.assertIn("Max pain", text)
+
+
 if __name__ == "__main__":
     unittest.main()
