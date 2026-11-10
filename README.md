@@ -51,6 +51,10 @@ streamlit run ui/app.py
 
 Open `http://localhost:8501`.
 
+On Windows you can instead double-click **`Open Nifty Sentinel.bat`** in the project folder: it starts the app
+on port 8510 and opens your browser (if the app is already running, it just opens the browser). Keep its
+window open while you use the app; closing it stops the app.
+
 ### Offline demo mode (for presentations)
 The evening before presenting, with internet:
 ```bash
